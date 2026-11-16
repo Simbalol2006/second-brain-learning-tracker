@@ -3,9 +3,9 @@
 Save long learning content (mostly YouTube), understand it, link related items, and get
 "what to learn next" suggestions. Everything runs on your laptop except the LLM call.
 
-**Status: Phase 2 of 6 — ingest + understand.** You can save a URL (fetched, chunked, embedded,
-stored) and have an LLM summarize and tag it. Search, links, recommendations and the UI come in
-later phases.
+**Status: Phase 3 of 6 — ingest, understand, search, connect.** You can save a URL, have an
+LLM summarize and tag it, search everything by meaning, and see which items are related.
+Recommendations, progress tracking and the UI come in later phases.
 Design: [docs/DESIGN.md](docs/DESIGN.md) · Decisions: [docs/DECISIONS.md](docs/DECISIONS.md) ·
 Phase notes: [docs/phases/](docs/phases/)
 
@@ -41,12 +41,35 @@ uv run sb analyze 1                                           # LLM summary, tag
 uv run sb analyze --all                                       # every item not analyzed yet
 uv run sb ingest "<url>" --analyze                            # save and analyze in one go
 uv run sb show 1                                              # details, analysis and stage timings
+uv run sb search "how do embeddings work"                     # semantic search, best passage per item
+uv run sb related 1                                           # items linked to item 1
+uv run sb graph --out graph.json                              # nodes + edges for a graph view
 uv run sb --help
 ```
 
 Statuses: `embedded` (saved and searchable), `analyzed` (also summarized and tagged),
 `no_transcript` (video has no captions), `failed` (the reason is printed and stored; run the same
 command again to retry — finished stages are not repeated).
+
+## Related items (links)
+
+Two items are linked when `0.7 x text similarity + 0.3 x shared tags` reaches `LINK_THRESHOLD`
+(tags = the topics and skills from the analysis). Links are updated automatically when an item
+is ingested or analyzed.
+
+```bash
+uv run sb links --stats      # score distribution over all pairs: use it to choose the threshold
+uv run sb links --rebuild    # recompute all links after changing LINK_THRESHOLD or LINK_EMBED_WEIGHT
+```
+
+The default threshold (0.5) is a starting value that has **not been checked on real data**.
+After saving 20-30 items, run `sb links --stats` and `sb related <id>` on a few items and adjust.
+If you used the app before Phase 3, run `sb links --rebuild` once.
+
+## Evaluation labels
+
+`uv run sb eval-templates` writes three files into `eval/` from your saved items. How to fill
+them in: [eval/README.md](eval/README.md).
 
 ## The LLM (summaries and tags)
 
@@ -128,6 +151,7 @@ All settings live in `.env` (see `.env.example` for the full list with defaults)
 | `Ollama is not reachable` / `does not have the model` | Run `ollama serve`, and `ollama pull <model>`. |
 | `The model returned invalid output 2 times` | The model could not follow the JSON schema. Retry, or use a stronger model. |
 | `ran out of output tokens` / `hit its output limit` | Raise `LLM_MAX_OUTPUT_TOKENS`. |
+| `sb related` shows nothing, or far too much | Check `sb links --stats`, change `LINK_THRESHOLD`, then `sb links --rebuild`. |
 | Whisper `libcublas` / `libcudnn` error | Set `WHISPER_DEVICE=cpu`, or complete "Whisper on the GPU". |
 
 Windows is not tested yet; development targets Kubuntu.

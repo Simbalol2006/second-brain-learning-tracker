@@ -74,7 +74,7 @@ def test_youtube_happy_path(
     assert len(items.load_segments(conn, result.item_id) or []) == 100
 
     stages = [t["stage"] for t in items.load_timings(conn, result.item_id)]
-    assert stages == ["metadata", "captions", "chunk", "embed"]
+    assert stages == ["metadata", "captions", "chunk", "embed", "link"]
 
 
 def test_stored_vectors_are_searchable(
@@ -137,7 +137,7 @@ def test_whisper_fills_in_when_asked(
     assert item["error"] is None
     assert not audio.exists()  # audio is removed after a successful transcription
     stages = [t["stage"] for t in items.load_timings(conn, first.item_id)]
-    assert stages[-4:] == ["audio_download", "whisper", "chunk", "embed"]
+    assert stages[-5:] == ["audio_download", "whisper", "chunk", "embed", "link"]
 
 
 def test_fetch_failure_is_recorded_and_raised(
@@ -201,7 +201,7 @@ def test_article_happy_path(
     chunks = items.load_chunks(conn, result.item_id)
     assert len(chunks) > 1
     assert chunks[0]["start_sec"] is None
-    assert [t["stage"] for t in items.load_timings(conn, result.item_id)] == ["fetch_article", "chunk", "embed"]
+    assert [t["stage"] for t in items.load_timings(conn, result.item_id)] == ["fetch_article", "chunk", "embed", "link"]
 
 
 def test_invalid_url_creates_no_item(

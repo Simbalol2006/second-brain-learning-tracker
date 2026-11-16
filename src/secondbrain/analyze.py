@@ -16,7 +16,7 @@ from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from secondbrain import items, prompts
+from secondbrain import items, links, prompts
 from secondbrain.config import Settings
 from secondbrain.errors import AnalysisError, SecondBrainError
 from secondbrain.llm.base import LLMProvider
@@ -65,6 +65,7 @@ def analyze_item(
         analysis = _run(conn, settings, provider, item, [s.text for s in segments])
         items.save_analysis(conn, item_id, analysis, provider.name, provider.model, prompts.PROMPT_VERSION)
         items.set_status(conn, item_id, "analyzed")
+        links.update_item(conn, settings, item_id)  # tags changed, so link scores changed
         items.add_timing(conn, item_id, "analyze", time.perf_counter() - start)
         conn.commit()
     except Exception as exc:

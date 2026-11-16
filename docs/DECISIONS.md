@@ -173,3 +173,61 @@ Format: **What / Why / Alternatives / Trade-off.**
 - **Why:** faithfulness is what the eval measures; transcripts are untrusted input; a stored version tells which analyses predate a prompt change.
 - **Alternatives:** prompts inline in the code; no versioning.
 - **Trade-off:** an instruction in the prompt reduces, but does not remove, the chance of invented facts or of the model following text inside a transcript.
+
+---
+
+## Phase 3 — Search, links, graph data
+
+### D28. Search ranks items by their single best chunk
+- **What:** the query is embedded, the nearest chunks are fetched, and each item is represented by its best chunk (score = cosine similarity). Results show that passage and a timestamp link.
+- **Why:** a long video should be found by the one part that answers the question; the passage tells the user *why* it matched and where to jump in.
+- **Alternatives:** average or sum over an item's chunks (favours long items); search item vectors only (loses the passage).
+- **Trade-off:** an item that is weakly relevant throughout loses to one with a single strong passage.
+
+### D29. Search widens `k` until enough different items are found
+- **What:** start with the 30 nearest chunks; if they belong to fewer items than asked for, double `k` and retry, up to sqlite-vec's limit of 4096.
+- **Why:** with one very long item, all 30 nearest chunks can be its own. A fixed `k` would then return one result.
+- **Alternatives:** a large fixed `k`; a SQL-side "best chunk per item" query.
+- **Trade-off:** occasional extra queries; each is an exact scan, which is fast at this size.
+
+### D30. No keyword or hybrid search, no reranker (yet)
+- **What:** search is embedding-only.
+- **Why:** it is what the brief asks for and the smallest thing that can be evaluated. Hybrid search is added only if the retrieval eval shows misses on exact terms (names, acronyms).
+- **Alternatives:** SQLite FTS5 + score fusion; a cross-encoder reranker.
+- **Trade-off:** exact-term queries may rank worse than they could.
+
+### D31. Link score = 0.7 × text similarity + 0.3 × tag overlap, stored above a threshold
+- **What:** text similarity is the cosine of the two item vectors (negative values count as 0). Tag overlap is the Jaccard index of the items' tags. Pairs with score ≥ `LINK_THRESHOLD` are stored in `links`.
+- **Why:** embeddings find related items even before analysis; shared tags add an explainable signal. Both parts are stored per link so the UI can say why two items are linked.
+- **Alternatives:** embeddings only; tags only; k-nearest-neighbour links with no threshold.
+- **Trade-off:** **the weight (0.7) and threshold (0.5) are unvalidated starting values.** They could not be set from a score distribution as DESIGN.md planned, because the build environment has neither the real embedding model nor real data. `sb links --stats` exists so they can be set on the real library before labelling.
+
+### D32. Tag overlap uses topics and skills together
+- **What:** one tag set per item (topic names ∪ skill names). The column is `tag_jaccard` (DESIGN.md called it `topic_jaccard`).
+- **Why:** a shared skill is as much a sign of relatedness as a shared topic, and items often have few tags, so using both gives a less jumpy number.
+- **Alternatives:** topics only; separate weights for topics and skills.
+- **Trade-off:** depends on the tag consistency discussed in D23; un-analyzed items have no tags and can only link through text similarity (maximum score 0.7).
+
+### D33. Links are updated when an item is embedded or analyzed
+- **What:** `links.update_item()` runs at the end of ingest and again after analysis (tags changed). It recomputes that item against all others. `sb links --rebuild` recomputes everything.
+- **Why:** "related to this" is correct right after saving, with no separate command to remember.
+- **Alternatives:** compute links only on demand; a nightly rebuild.
+- **Trade-off:** each update loads all item vectors (fine for ~1,000 items). Changing the weight or threshold needs a manual rebuild.
+
+### D34. Only links above the threshold are stored; any pair can be scored on demand
+- **What:** `links` holds linked pairs only. `pair_score()` computes one pair, and `all_pair_scores()` every pair, from vectors and tags.
+- **Why:** storing all pairs grows quadratically and most would never be read. The eval needs scores for unlinked pairs too, so they must be computable.
+- **Alternatives:** store every pair; store top-k per item.
+- **Trade-off:** scoring all pairs is recomputed each time `--stats` or the template sampler runs.
+
+### D35. Graph export is plain JSON, limited to each item's strongest links
+- **What:** `links.graph()` returns `{nodes, edges}`; an edge is kept if it is among the top 5 links of either endpoint. Phase 5 draws it.
+- **Why:** a threshold alone can leave popular topics as an unreadable hairball; capping per item keeps the picture usable. JSON keeps the drawing library replaceable.
+- **Alternatives:** export every link; networkx objects.
+- **Trade-off:** links weaker than both endpoints' top 5 are stored but not drawn.
+
+### D36. Eval templates refer to items by URL, hide scores, and are never overwritten silently
+- **What:** `sb eval-templates` writes `eval/retrieval.yaml`, `links.yaml`, `summaries.yaml`. Pairs are sampled from the top, middle and rest of the score range with a fixed seed and written in shuffled order without scores. Existing files need `--force`.
+- **Why:** URLs survive a rebuilt database. Hiding scores keeps labels independent of the system. Refusing to overwrite protects an hour of labelling.
+- **Alternatives:** label by database id; purely random pairs (30 random pairs would contain almost no related ones, so recall could not be measured).
+- **Trade-off:** the stratified sample is not representative of all pairs; `docs/EVAL.md` must state that precision and recall describe the sample.

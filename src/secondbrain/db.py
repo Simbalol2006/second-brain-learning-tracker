@@ -96,6 +96,19 @@ MIGRATIONS: list[str] = [
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     """,
+    # 3 (Phase 3): links between related items. Only pairs above the threshold are stored.
+    """
+    CREATE TABLE links (
+        item_a INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+        item_b INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+        embed_sim REAL NOT NULL,
+        tag_jaccard REAL NOT NULL,
+        score REAL NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (item_a, item_b),
+        CHECK (item_a < item_b)
+    );
+    """,
 ]
 
 

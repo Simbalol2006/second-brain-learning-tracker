@@ -41,6 +41,9 @@ def test_real_embedding_model(real_embedder: FastEmbedEmbedder) -> None:
     assert out.shape == (3, 384)
     assert np.linalg.norm(out, axis=1) == pytest.approx([1.0, 1.0, 1.0], abs=1e-4)
     assert float(out[0] @ out[1]) > float(out[0] @ out[2])
+    query = real_embedder.embed_query("how are neural networks trained?")
+    assert query.shape == (384,)
+    assert int(np.argmax(out @ query)) in (0, 1)  # an ML sentence beats the recipe
 
 
 def test_real_youtube_ingest(

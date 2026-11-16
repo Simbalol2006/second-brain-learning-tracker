@@ -9,6 +9,7 @@ import logging
 import sqlite3
 from collections.abc import Sequence
 
+import numpy as np
 import sqlite_vec
 
 from secondbrain.errors import StorageError
@@ -69,6 +70,16 @@ def has_item_vector(conn: sqlite3.Connection, item_id: int) -> bool:
         return False
     row = conn.execute("SELECT 1 FROM vec_items WHERE rowid = ?", (item_id,)).fetchone()
     return row is not None
+
+
+def all_item_vectors(conn: sqlite3.Connection) -> tuple[list[int], np.ndarray]:
+    """Every item vector: (item ids, matrix with one row per id)."""
+    if not tables_exist(conn):
+        return [], np.zeros((0, 0), dtype=np.float32)
+    rows = conn.execute("SELECT rowid, embedding FROM vec_items ORDER BY rowid").fetchall()
+    ids = [int(row[0]) for row in rows]
+    vectors = [np.frombuffer(row[1], dtype=np.float32) for row in rows]
+    return ids, np.vstack(vectors) if vectors else np.zeros((0, 0), dtype=np.float32)
 
 
 def knn_chunks(

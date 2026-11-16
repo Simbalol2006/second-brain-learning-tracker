@@ -11,7 +11,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from secondbrain import items, vectors
+from secondbrain import items, links, vectors
 from secondbrain.config import Settings
 from secondbrain.embed import Embedder, mean_vector
 from secondbrain.errors import IngestError, SecondBrainError, TranscriptUnavailable
@@ -76,6 +76,10 @@ def process_item(
         stage = "embed"
         if not vectors.has_item_vector(conn, item_id):
             _embed_stage(conn, get_embedder(), item_id)
+            stage = "link"
+            with _timed(conn, item_id, "link"):
+                links.update_item(conn, settings, item_id)
+            conn.commit()
     except Exception as exc:
         conn.rollback()
         items.set_status(conn, item_id, "failed", error=f"[{stage}] {exc}")

@@ -21,6 +21,10 @@ class Embedder(Protocol):
         """Return an array of shape (len(texts), dim)."""
         ...
 
+    def embed_query(self, text: str) -> np.ndarray:
+        """Return one vector of shape (dim,) for a search query."""
+        ...
+
 
 class FastEmbedEmbedder:
     """Wraps a fastembed model. The model is downloaded to cache_dir on first use."""
@@ -47,6 +51,14 @@ class FastEmbedEmbedder:
         except Exception as exc:
             raise EmbeddingError(f"Embedding failed: {exc}") from exc
         return normalize(vectors)
+
+    def embed_query(self, text: str) -> np.ndarray:
+        # query_embed adds the query prefix for models that were trained with one.
+        try:
+            vector = np.asarray(next(iter(self._model.query_embed(text))), dtype=np.float32)
+        except Exception as exc:
+            raise EmbeddingError(f"Embedding the query failed: {exc}") from exc
+        return normalize(vector)
 
 
 def normalize(vectors: np.ndarray) -> np.ndarray:

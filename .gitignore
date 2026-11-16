@@ -13,3 +13,6 @@ __pycache__/
 .mypy_cache/
 dist/
 build/
+
+# Local exports
+graph.json

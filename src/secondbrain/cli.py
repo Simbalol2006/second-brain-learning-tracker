@@ -1,5 +1,6 @@
 """Command line interface. Run `sb --help`."""
 
+import json
 import logging
 import sqlite3
 from collections.abc import Callable
@@ -10,7 +11,8 @@ import typer
 from pydantic import ValidationError
 
 from secondbrain import analyze as analysis
-from secondbrain import db, items
+from secondbrain import db, evalset, items, links
+from secondbrain import search as searching
 from secondbrain.config import Settings
 from secondbrain.embed import Embedder, FastEmbedEmbedder
 from secondbrain.errors import SecondBrainError
@@ -190,6 +192,98 @@ def list_items(
             f"{row['id']:>4}  {row['ingest_status']:<13}  {row['transcript_source']:<8}  "
             f"{minutes:>4}  {title}"
         )
+
+
+@app.command()
+def search(
+    query: Annotated[str, typer.Argument(help="What you are looking for, in your own words.")],
+    limit: Annotated[int, typer.Option(help="How many items to show.")] = 5,
+) -> None:
+    """Semantic search over everything saved."""
+    settings, conn = _open()
+    try:
+        hits = searching.search(conn, _embedder_factory(settings)(), query, limit=limit)
+    except SecondBrainError as exc:
+        _fail(str(exc))
+    if not hits:
+        typer.echo("No results. Save something first with: sb ingest <url>")
+        return
+    for rank, hit in enumerate(hits, start=1):
+        typer.echo(f"{rank}. [{hit.score:.2f}] {hit.title} (item {hit.item_id})")
+        typer.echo(f"   {hit.link}")
+        typer.echo(f"   {hit.passage[:240]}{'...' if len(hit.passage) > 240 else ''}")
+
+
+@app.command()
+def related(
+    item_id: Annotated[int, typer.Argument(help="Item id from 'sb list'.")],
+    limit: Annotated[int, typer.Option(help="How many related items to show.")] = 5,
+) -> None:
+    """Show the items linked to one item, strongest link first."""
+    _, conn = _open()
+    try:
+        rows = links.related(conn, item_id, limit)
+    except SecondBrainError as exc:
+        _fail(str(exc))
+    if not rows:
+        typer.echo(f"Item {item_id} has no links above the threshold.")
+        return
+    for row in rows:
+        typer.echo(
+            f"[{row['score']:.2f}] {row['title'] or row['url']} (item {row['id']}) "
+            f"- text similarity {row['embed_sim']:.2f}, shared tags {row['tag_jaccard']:.2f}"
+        )
+
+
+@app.command(name="links")
+def links_command(
+    rebuild: Annotated[
+        bool, typer.Option(help="Recompute every link (after changing LINK_* settings).")
+    ] = False,
+    stats: Annotated[
+        bool, typer.Option(help="Show the score distribution over all item pairs.")
+    ] = False,
+) -> None:
+    """Maintain item links: rebuild them, or inspect scores to choose LINK_THRESHOLD."""
+    settings, conn = _open()
+    if not rebuild and not stats:
+        _fail("Give --rebuild and/or --stats.")
+    if rebuild:
+        typer.echo(f"{links.rebuild(conn, settings)} links stored (threshold {settings.link_threshold}).")
+    if stats:
+        for key, value in links.score_stats(conn, settings).items():
+            typer.echo(f"{key:<24} {value:.3f}" if isinstance(value, float) else f"{key:<24} {value}")
+
+
+@app.command(name="graph")
+def graph_command(
+    out: Annotated[Path | None, typer.Option(help="Write JSON here instead of printing it.")] = None,
+    max_links: Annotated[int, typer.Option(help="Strongest links kept per item.")] = 5,
+) -> None:
+    """Export the item graph (nodes and edges) as JSON."""
+    _, conn = _open()
+    data = json.dumps(links.graph(conn, max_links), indent=2, ensure_ascii=False)
+    if out is None:
+        typer.echo(data)
+        return
+    out.write_text(data, encoding="utf-8")
+    typer.echo(f"Wrote {out}")
+
+
+@app.command(name="eval-templates")
+def eval_templates(
+    out: Annotated[Path, typer.Option(help="Folder for the label files.")] = Path("eval"),
+    force: Annotated[bool, typer.Option(help="Overwrite existing label files.")] = False,
+) -> None:
+    """Create the label files for the evaluation from your saved items."""
+    settings, conn = _open()
+    try:
+        written = evalset.write_templates(conn, settings, out, force=force)
+    except SecondBrainError as exc:
+        _fail(str(exc))
+    for path in written:
+        typer.echo(f"Wrote {path}")
+    typer.echo("Next: fill them in as described in eval/README.md.")
 
 
 @app.command()

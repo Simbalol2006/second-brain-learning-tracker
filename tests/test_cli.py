@@ -2,7 +2,10 @@
 
 from pathlib import Path
 
+import json
+
 import pytest
+import yaml
 from conftest import FakeEmbedder, FakeProvider, make_segments
 from typer.testing import CliRunner
 
@@ -176,3 +179,72 @@ def test_analyze_needs_an_id_or_all() -> None:
     result = runner.invoke(cli.app, ["analyze"])
     assert result.exit_code == 1
     assert "Give an item id, or --all" in result.output
+
+
+def ingest_two(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two videos with different words, so search and links have something to tell apart."""
+    texts = {"dQw4w9WgXcQ": "gradient descent trains neural networks", "aaaaaaaaaaa": "sourdough bread needs slow fermentation"}
+
+    def captions(video_id: str, languages: list[str]) -> Transcript:
+        segments = make_segments(40)
+        return Transcript([type(s)(texts[video_id], s.start, s.end) for s in segments], "auto", "en")
+
+    monkeypatch.setattr(pipeline.youtube, "fetch_captions", captions)
+    monkeypatch.setattr(pipeline.youtube, "fetch_metadata", lambda video_id: Metadata(title=f"Video {video_id[:3]}"))
+    assert runner.invoke(cli.app, ["ingest", URL]).exit_code == 0
+    assert runner.invoke(cli.app, ["ingest", "https://youtu.be/aaaaaaaaaaa"]).exit_code == 0
+
+
+def test_search_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    ingest_two(monkeypatch)
+    result = runner.invoke(cli.app, ["search", "sourdough bread", "--limit", "1"])
+    assert result.exit_code == 0, result.output
+    assert "1. [" in result.output and "Video aaa (item 2)" in result.output
+    assert "https://www.youtube.com/watch?v=aaaaaaaaaaa&t=" in result.output
+    assert "2. [" not in result.output
+
+
+def test_search_on_empty_library_and_empty_query() -> None:
+    assert "No results" in runner.invoke(cli.app, ["search", "anything"]).output
+    result = runner.invoke(cli.app, ["search", "  "])
+    assert result.exit_code == 1 and "query is empty" in result.output
+
+
+def test_related_links_and_graph_commands(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    ingest_two(monkeypatch)
+    assert "no links above the threshold" in runner.invoke(cli.app, ["related", "1"]).output
+
+    monkeypatch.setenv("LINK_THRESHOLD", "0")
+    rebuilt = runner.invoke(cli.app, ["links", "--rebuild", "--stats"])
+    assert rebuilt.exit_code == 0, rebuilt.output
+    assert "1 links stored (threshold 0.0)" in rebuilt.output
+    assert "pairs                    1" in rebuilt.output and "p50" in rebuilt.output
+
+    related = runner.invoke(cli.app, ["related", "1"]).output
+    assert "Video aaa (item 2)" in related and "text similarity" in related
+
+    out = tmp_path / "graph.json"
+    assert runner.invoke(cli.app, ["graph", "--out", str(out)]).exit_code == 0
+    graph = json.loads(out.read_text())
+    assert len(graph["nodes"]) == 2 and len(graph["edges"]) == 1
+    assert json.loads(runner.invoke(cli.app, ["graph"]).output)["edges"] == graph["edges"]
+
+
+def test_links_command_needs_an_option() -> None:
+    result = runner.invoke(cli.app, ["links"])
+    assert result.exit_code == 1 and "--rebuild and/or --stats" in result.output
+
+
+def test_related_unknown_item() -> None:
+    result = runner.invoke(cli.app, ["related", "42"])
+    assert result.exit_code == 1 and "No item with id 42" in result.output
+
+
+def test_eval_templates_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    ingest_two(monkeypatch)
+    out = tmp_path / "eval"
+    result = runner.invoke(cli.app, ["eval-templates", "--out", str(out)])
+    assert result.exit_code == 0, result.output
+    assert len(yaml.safe_load((out / "links.yaml").read_text())["pairs"]) == 1
+    again = runner.invoke(cli.app, ["eval-templates", "--out", str(out)])
+    assert again.exit_code == 1 and "Not overwriting" in again.output

@@ -10,7 +10,7 @@ from secondbrain.errors import StorageError
 def test_connect_creates_schema(conn: sqlite3.Connection) -> None:
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"items", "transcripts", "chunks", "ingest_timings", "meta"} <= tables
-    assert {"analyses", "topics", "item_topics", "llm_calls"} <= tables
+    assert {"analyses", "topics", "item_topics", "llm_calls", "links"} <= tables
     assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
 
 

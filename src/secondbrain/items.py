@@ -213,6 +213,14 @@ def llm_usage(conn: sqlite3.Connection, item_id: int) -> sqlite3.Row:
     ).fetchone()
 
 
+def all_item_tags(conn: sqlite3.Connection) -> dict[int, set[int]]:
+    """Tag ids (topics and skills together) for every item that has any."""
+    tags: dict[int, set[int]] = {}
+    for item_id, topic_id in conn.execute("SELECT item_id, topic_id FROM item_topics"):
+        tags.setdefault(int(item_id), set()).add(int(topic_id))
+    return tags
+
+
 def load_timings(conn: sqlite3.Connection, item_id: int) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT stage, seconds, created_at FROM ingest_timings WHERE item_id = ? ORDER BY id",
