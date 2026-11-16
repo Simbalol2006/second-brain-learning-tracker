@@ -180,7 +180,7 @@ def tag_vocabulary(conn: sqlite3.Connection, kind: str, limit: int) -> list[str]
 
 def add_llm_call(
     conn: sqlite3.Connection,
-    item_id: int,
+    item_id: int | None,
     purpose: str,
     provider: str,
     model: str,

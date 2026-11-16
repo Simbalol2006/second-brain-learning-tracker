@@ -34,14 +34,6 @@ inventing a new name for the same thing.
 Existing topics: {topics}
 Existing skills: {skills}"""
 
-RETRY = """
-
-Your previous answer was rejected.
-Previous answer: {previous}
-Problems: {problems}
-Answer again with corrected JSON only."""
-
-
 def header(title: str | None, author: str | None) -> str:
     """Item metadata shown above the content."""
     return f"Title: {title or 'unknown'}\nAuthor/channel: {author or 'unknown'}"
@@ -67,5 +59,32 @@ def final_prompt(title: str | None, author: str | None, vocab: str, source_label
     return "\n\n".join(part for part in parts if part)
 
 
-def retry_suffix(previous: str, problems: str) -> str:
-    return RETRY.format(previous=previous[:2000], problems=problems)
+RECOMMEND_SYSTEM = """You plan the next study steps for one learner, using their profile and \
+a list of items they have saved but not finished.
+
+Rules:
+- Choose only from the listed items, and refer to each by its id.
+- Order your choices as a study sequence: foundations before material that builds on them, \
+and items that serve the learner's goals before others.
+- Give one short reason per item (at most 25 words). Base it on the learner's goals, skills \
+and finished items, and on the item's topics and difficulty.
+- Do not claim anything about an item that its line does not say.
+- Answer with JSON only, matching the requested schema."""
+
+
+def recommend_prompt(
+    goals: list[str], skills: list[str], finished: list[str], cards: list[str], limit: int
+) -> str:
+    def block(label: str, lines: list[str]) -> str:
+        body = "\n".join(f"- {line}" for line in lines) if lines else "- (none yet)"
+        return f"{label}:\n{body}"
+
+    return "\n\n".join(
+        [
+            f"Pick the {limit} best items to study next and put them in order.",
+            block("LEARNER GOALS", goals),
+            block("LEARNER SKILLS", skills),
+            block("RECENTLY FINISHED", finished),
+            block("ITEMS TO CHOOSE FROM", cards),
+        ]
+    )

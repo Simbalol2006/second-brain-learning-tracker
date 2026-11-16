@@ -248,3 +248,67 @@ def test_eval_templates_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert len(yaml.safe_load((out / "links.yaml").read_text())["pairs"]) == 1
     again = runner.invoke(cli.app, ["eval-templates", "--out", str(out)])
     assert again.exit_code == 1 and "Not overwriting" in again.output
+
+
+def test_status_profile_and_rule_based_recommend(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_fake_llm(monkeypatch, [ANSWER, ANSWER])
+    ingest_two(monkeypatch)
+    assert runner.invoke(cli.app, ["analyze", "--all"]).exit_code == 0
+
+    assert "goal 1 added" in runner.invoke(cli.app, ["profile", "add-goal", "bake great bread"]).output
+    assert "skill 'python' set to intermediate" in runner.invoke(cli.app, ["profile", "set-skill", "Python", "2"]).output
+    assert "item 1: done" in runner.invoke(cli.app, ["status", "1", "done"]).output
+
+    shown = runner.invoke(cli.app, ["profile", "show"]).output
+    assert "  1  bake great bread" in shown
+    assert "python" in shown and "intermediate" in shown and "(manual, 0 finished)" in shown
+    assert "vector search" in shown and "(derived, 1 finished)" in shown
+    assert "Progress: 1 to_watch, 0 watching, 1 done" in shown
+    assert "done" in runner.invoke(cli.app, ["list"]).output
+
+    result = runner.invoke(cli.app, ["recommend", "--no-llm"])
+    assert result.exit_code == 0, result.output
+    assert "1. Video aaa (item 2) - beginner" in result.output
+    assert 'Closest to your goal "bake great bread"' in result.output
+    assert "item 1)" not in result.output  # finished items are not suggested
+
+
+def test_recommend_with_llm_reasons(monkeypatch: pytest.MonkeyPatch) -> None:
+    reply = '{"recommendations": [{"item_id": 2, "reason": "Start here."}, {"item_id": 1, "reason": "Then this."}]}'
+    use_fake_llm(monkeypatch, [ANSWER, ANSWER, reply])
+    ingest_two(monkeypatch)
+    runner.invoke(cli.app, ["analyze", "--all"])
+    result = runner.invoke(cli.app, ["recommend"])
+    assert result.exit_code == 0, result.output
+    assert "1. Video aaa (item 2)" in result.output and "   Start here." in result.output
+    assert "2. Video dQw (item 1)" in result.output and "   Then this." in result.output
+    assert "Tip: no goals set" in result.output
+
+
+def test_recommend_warns_when_the_llm_fails_or_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_fake_llm(monkeypatch, [ANSWER, ANSWER, "garbage", "garbage"])
+    ingest_two(monkeypatch)
+    runner.invoke(cli.app, ["analyze", "--all"])
+    failed = runner.invoke(cli.app, ["recommend"])
+    assert failed.exit_code == 0
+    assert "Warning: The LLM step failed" in failed.output and "rule-based" in failed.output
+    assert "1. " in failed.output
+
+    monkeypatch.undo()  # back to the real build_provider: no API key is configured
+    missing = runner.invoke(cli.app, ["recommend"])
+    assert "Warning: no LLM available (ANTHROPIC_API_KEY is not set" in missing.output
+
+
+def test_recommend_with_nothing_analyzed() -> None:
+    result = runner.invoke(cli.app, ["recommend", "--no-llm"])
+    assert result.exit_code == 0 and "Nothing to recommend" in result.output
+
+
+def test_status_and_profile_errors() -> None:
+    assert "No item with id 7" in runner.invoke(cli.app, ["status", "7", "done"]).output
+    runner.invoke(cli.app, ["ingest", URL])
+    bad = runner.invoke(cli.app, ["status", "1", "finished"])
+    assert bad.exit_code == 1 and "Unknown status 'finished'" in bad.output
+    assert runner.invoke(cli.app, ["profile", "set-skill", "python", "9"]).exit_code == 1
+    assert runner.invoke(cli.app, ["profile", "remove-goal", "3"]).exit_code == 1
+    assert runner.invoke(cli.app, ["profile", "remove-skill", "nothing"]).exit_code == 1

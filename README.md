@@ -3,9 +3,9 @@
 Save long learning content (mostly YouTube), understand it, link related items, and get
 "what to learn next" suggestions. Everything runs on your laptop except the LLM call.
 
-**Status: Phase 3 of 6 — ingest, understand, search, connect.** You can save a URL, have an
-LLM summarize and tag it, search everything by meaning, and see which items are related.
-Recommendations, progress tracking and the UI come in later phases.
+**Status: Phase 4 of 6 — everything except the UI and the evaluation.** You can save a URL,
+have an LLM summarize and tag it, search by meaning, see related items, track your progress and
+get "what to learn next" suggestions. All of it runs from the command line for now.
 Design: [docs/DESIGN.md](docs/DESIGN.md) · Decisions: [docs/DECISIONS.md](docs/DECISIONS.md) ·
 Phase notes: [docs/phases/](docs/phases/)
 
@@ -50,6 +50,26 @@ uv run sb --help
 Statuses: `embedded` (saved and searchable), `analyzed` (also summarized and tagged),
 `no_transcript` (video has no captions), `failed` (the reason is printed and stored; run the same
 command again to retry — finished stages are not repeated).
+
+## Progress, profile and recommendations
+
+```bash
+uv run sb status 3 watching                       # to_watch | watching | done
+uv run sb status 3 done                           # finishing an item raises your skill levels
+uv run sb profile add-goal "become an ML engineer"
+uv run sb profile set-skill python 2              # 0 none, 1 beginner, 2 intermediate, 3 advanced
+uv run sb profile show                            # goals, skills, progress counts
+uv run sb recommend                               # what to learn next, in order, with reasons
+uv run sb recommend --no-llm                      # same ranking, rule-based reasons, no LLM call
+```
+
+Skill levels come from the tags of the items you finish (1 finished item = beginner; 2 with one
+intermediate or harder = intermediate; 3 with one advanced = advanced). A level you set by hand
+is never changed automatically.
+
+Recommendations first score every unfinished, analyzed item on goal fit, novelty and readiness,
+then ask the LLM to order the best ten and give a one-line reason each. If the LLM is missing or
+answers badly you still get the rule-based order, with a warning.
 
 ## Related items (links)
 

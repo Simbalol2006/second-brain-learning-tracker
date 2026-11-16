@@ -11,7 +11,8 @@ import typer
 from pydantic import ValidationError
 
 from secondbrain import analyze as analysis
-from secondbrain import db, evalset, items, links
+from secondbrain import db, evalset, items, links, profile
+from secondbrain import recommend as recommending
 from secondbrain import search as searching
 from secondbrain.config import Settings
 from secondbrain.embed import Embedder, FastEmbedEmbedder
@@ -20,6 +21,8 @@ from secondbrain.ingest import pipeline
 from secondbrain.llm import LLMProvider, build_provider
 
 app = typer.Typer(help="Second Brain: save, search and plan your learning.", no_args_is_help=True)
+profile_app = typer.Typer(help="Your goals and skill levels.", no_args_is_help=True)
+app.add_typer(profile_app, name="profile")
 logger = logging.getLogger(__name__)
 
 
@@ -184,13 +187,13 @@ def list_items(
     if not rows:
         typer.echo("No items yet. Add one with: sb ingest <url>")
         return
-    typer.echo(f"{'id':>4}  {'status':<13}  {'source':<8}  {'min':>4}  title")
+    typer.echo(f"{'id':>4}  {'status':<13}  {'progress':<8}  {'source':<8}  {'min':>4}  title")
     for row in rows:
         minutes = "-" if row["duration_sec"] is None else str(round(row["duration_sec"] / 60))
         title = row["title"] or row["url"]
         typer.echo(
-            f"{row['id']:>4}  {row['ingest_status']:<13}  {row['transcript_source']:<8}  "
-            f"{minutes:>4}  {title}"
+            f"{row['id']:>4}  {row['ingest_status']:<13}  {row['progress_status']:<8}  "
+            f"{row['transcript_source']:<8}  {minutes:>4}  {title}"
         )
 
 
@@ -284,6 +287,117 @@ def eval_templates(
     for path in written:
         typer.echo(f"Wrote {path}")
     typer.echo("Next: fill them in as described in eval/README.md.")
+
+
+@app.command()
+def status(
+    item_id: Annotated[int, typer.Argument(help="Item id from 'sb list'.")],
+    new_status: Annotated[str, typer.Argument(help="to_watch, watching or done.")],
+) -> None:
+    """Set your progress on an item. Marking it done updates your skill levels."""
+    _, conn = _open()
+    try:
+        profile.set_progress(conn, item_id, new_status)
+    except SecondBrainError as exc:
+        _fail(str(exc))
+    typer.echo(f"item {item_id}: {new_status}")
+
+
+@app.command()
+def recommend(
+    limit: Annotated[int, typer.Option(help="How many suggestions.")] = 5,
+    no_llm: Annotated[
+        bool, typer.Option("--no-llm", help="Rule-based order and reasons only; no LLM call.")
+    ] = False,
+) -> None:
+    """Suggest what to learn next, in order, with a one-line reason each."""
+    settings, conn = _open()
+    provider: LLMProvider | None = None
+    if not no_llm:
+        try:
+            provider = build_provider(settings)
+        except SecondBrainError as exc:
+            typer.secho(f"Warning: no LLM available ({exc}) Using rule-based reasons.", fg=typer.colors.YELLOW, err=True)
+    try:
+        result = recommending.recommend(conn, _embedder_factory(settings), provider, limit=limit)
+    except SecondBrainError as exc:
+        _fail(str(exc))
+    if result.warning:
+        typer.secho(f"Warning: {result.warning}", fg=typer.colors.YELLOW, err=True)
+    if not result.suggestions:
+        typer.echo("Nothing to recommend: no analyzed, unfinished items. Try: sb analyze --all")
+        return
+    if not profile.goals(conn):
+        typer.echo('Tip: no goals set, so goal fit is ignored. Add one: sb profile add-goal "..."')
+    for rank, suggestion in enumerate(result.suggestions, start=1):
+        item = suggestion.candidate
+        minutes = "?" if item.duration_sec is None else str(round(item.duration_sec / 60))
+        typer.echo(f"{rank}. {item.title} (item {item.item_id}) - {item.difficulty}, {minutes} min")
+        typer.echo(f"   {suggestion.reason}")
+
+
+@profile_app.command("show")
+def profile_show() -> None:
+    """Show goals, skill levels and progress counts."""
+    _, conn = _open()
+    typer.echo("Goals:")
+    for goal in profile.goals(conn):
+        typer.echo(f"  {goal['id']:>3}  {goal['text']}")
+    typer.echo("Skills:")
+    for skill in profile.skills(conn):
+        typer.echo(
+            f"  {skill['name']:<30} {profile.LEVEL_NAMES[skill['level']]:<13} "
+            f"({skill['source']}, {skill['evidence_count']} finished)"
+        )
+    counts = dict(conn.execute("SELECT progress_status, count(*) FROM items GROUP BY progress_status"))
+    typer.echo("Progress: " + ", ".join(f"{counts.get(s, 0)} {s}" for s in profile.PROGRESS_STATES))
+
+
+@profile_app.command("add-goal")
+def profile_add_goal(text: Annotated[str, typer.Argument(help="What you want to learn or become.")]) -> None:
+    """Add a learning goal. Recommendations favour items close to your goals."""
+    _, conn = _open()
+    try:
+        goal_id = profile.add_goal(conn, text)
+    except SecondBrainError as exc:
+        _fail(str(exc))
+    typer.echo(f"goal {goal_id} added")
+
+
+@profile_app.command("remove-goal")
+def profile_remove_goal(goal_id: Annotated[int, typer.Argument(help="Goal id from 'sb profile show'.")]) -> None:
+    """Remove a goal."""
+    _, conn = _open()
+    try:
+        profile.remove_goal(conn, goal_id)
+    except SecondBrainError as exc:
+        _fail(str(exc))
+    typer.echo(f"goal {goal_id} removed")
+
+
+@profile_app.command("set-skill")
+def profile_set_skill(
+    name: Annotated[str, typer.Argument(help="Skill or topic name, e.g. python.")],
+    level: Annotated[int, typer.Argument(help="0 none, 1 beginner, 2 intermediate, 3 advanced.")],
+) -> None:
+    """Set a skill level by hand. Hand-set levels are never changed automatically."""
+    _, conn = _open()
+    try:
+        tag = profile.set_skill(conn, name, level)
+    except SecondBrainError as exc:
+        _fail(str(exc))
+    typer.echo(f"skill '{tag}' set to {profile.LEVEL_NAMES[level]}")
+
+
+@profile_app.command("remove-skill")
+def profile_remove_skill(name: Annotated[str, typer.Argument(help="Name of a hand-set skill.")]) -> None:
+    """Remove a hand-set level; the skill falls back to what your finished items imply."""
+    _, conn = _open()
+    try:
+        profile.remove_skill(conn, name)
+    except SecondBrainError as exc:
+        _fail(str(exc))
+    typer.echo("skill removed")
 
 
 @app.command()

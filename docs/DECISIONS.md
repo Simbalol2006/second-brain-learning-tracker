@@ -231,3 +231,55 @@ Format: **What / Why / Alternatives / Trade-off.**
 - **Why:** URLs survive a rebuilt database. Hiding scores keeps labels independent of the system. Refusing to overwrite protects an hour of labelling.
 - **Alternatives:** label by database id; purely random pairs (30 random pairs would contain almost no related ones, so recall could not be measured).
 - **Trade-off:** the stratified sample is not representative of all pairs; `docs/EVAL.md` must state that precision and recall describe the sample.
+
+---
+
+## Phase 4 — Profile, progress, recommendations
+
+### D37. Derived skill levels are recomputed from scratch on every progress change
+- **What:** `refresh_derived()` deletes all derived rows and rebuilds them from the items currently marked done. Rule: 1 finished item → beginner; 2 with one intermediate-or-harder → intermediate; 3 with one advanced → advanced.
+- **Why:** undoing a "done", re-analyzing an item, or changing tags all stay correct without tracking increments. The rule is simple enough to explain in one line.
+- **Alternatives:** increment counters on each "done"; ask the LLM to assess skill.
+- **Trade-off:** finishing videos is weak evidence of skill; the levels describe exposure, not tested ability. Levels depend on the tag consistency discussed in D23.
+
+### D38. Manual skill levels always win
+- **What:** `sb profile set-skill` stores a `manual` row. Recomputation only updates its evidence count, never its level. Removing it falls back to the derived level.
+- **Why:** the user knows things the app never saw (courses, work). Automatic changes to something set by hand would be surprising.
+- **Alternatives:** take the maximum of manual and derived; ask before overwriting.
+- **Trade-off:** a manual level can go stale as the user learns more; they must update it themselves.
+
+### D39. The profile uses the same tag names as items
+- **What:** `profile_skills` is keyed by `topics.id`. Topic tags and skill tags of finished items both count as skills. Manual skill names go through the same normalization.
+- **Why:** recommendations compare "what the item is tagged with" to "what the user has a level in"; one shared vocabulary makes that a lookup.
+- **Alternatives:** a separate skill taxonomy with a mapping to topics.
+- **Trade-off:** a manual skill named differently from the LLM's tag ("ml" vs "machine learning") will not match.
+
+### D40. Recommendations: rule-based scoring first, LLM for order and reasons second
+- **What:** every unfinished, analyzed item gets a score from three parts. The top ten go to the LLM with the profile; it returns an ordered list of item ids with one-line reasons.
+- **Why:** the scoring works with no LLM (and keeps the prompt small enough for a local model); the LLM adds what rules do badly — sequencing and a readable reason.
+- **Alternatives:** LLM only over the whole library (cost grows with library size, no fallback); rules only (reasons read like templates).
+- **Trade-off:** the LLM only sees the shortlist, so a good item ranked 11th by the rules cannot be recommended.
+
+### D41. Score = 0.5 × goal fit + 0.2 × novelty + 0.3 × readiness
+- **What:** *goal fit* is the cosine between the item vector and the closest goal, min-max rescaled across the candidates. *Novelty* is the share of the item's tags the user has no level in. *Readiness* is `1 − |difficulty − (level + 1)| / 3`, highest one step above the user's level. With no goals, the last two are rescaled to sum to 1.
+- **Why:** raw embedding similarities sit in a narrow band, so without rescaling goals barely changed the order (a test showed an unrelated easy item beating the goal's own topic).
+- **Alternatives:** raw similarity; learned weights; LLM-judged relevance per item.
+- **Trade-off:** **the weights are unvalidated starting values**, and there is no recommendation metric in the eval plan. Rescaling also means that when nothing matches a goal, the least-bad item still gets goal fit 1.
+
+### D42. LLM answers are checked against the shortlist; failure falls back visibly
+- **What:** validation gets the allowed ids and the limit as context: unknown ids, duplicates, too many items or an empty list are rejected and retried once. If the LLM is unreachable, unconfigured or wrong twice, the rule-based order and reasons are returned with a warning that the CLI prints.
+- **Why:** a hallucinated item id must never reach the user; a recommendation feature that dies with the LLM would break the "must not depend on a frontier model" rule.
+- **Alternatives:** drop invalid entries silently and keep the rest; fail the command.
+- **Trade-off:** rule-based reasons are formulaic.
+
+### D43. One shared "validated LLM call" helper
+- **What:** the retry-and-log logic from Phase 2 moved to `llm/validated.py` (`call_validated`) and is used by both analysis and recommendations. Recommendation calls are logged in `llm_calls` with no item id.
+- **Why:** the second user of the logic arrived; copying it would let the two drift apart.
+- **Alternatives:** keep it private to `analyze.py` and duplicate.
+- **Trade-off:** none significant; `prompts.py` lost the retry text, which now lives next to the code that uses it.
+
+### D44. Goals are plain rows; progress stays on the item
+- **What:** `profile_goals(id, text)`; removing a goal deletes it (DESIGN.md had an `active` flag). Progress is `items.progress_status` + `done_at`, as created in Phase 1.
+- **Why:** nothing uses an inactive goal, and one status column per item is all tracking needs.
+- **Alternatives:** soft-delete goals; a progress history table.
+- **Trade-off:** no history of when an item moved between states, only when it was finished.

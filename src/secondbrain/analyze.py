@@ -4,7 +4,7 @@ Short content needs one LLM call. Content longer than the input budget is
 handled map-reduce style: notes per window ("map"), notes merged if they are
 still too long ("collapse"), then one final call that produces the analysis.
 Every answer is validated against a Pydantic schema; an invalid answer gets
-one retry that shows the model its mistakes.
+one retry that shows the model its mistakes (see llm/validated.py).
 """
 
 import json
@@ -14,13 +14,14 @@ import time
 from collections.abc import Callable
 from typing import TypeVar
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
-from secondbrain import items, links, prompts
+from secondbrain import items, links, profile, prompts
 from secondbrain.config import Settings
 from secondbrain.errors import AnalysisError, SecondBrainError
 from secondbrain.llm.base import LLMProvider
-from secondbrain.schemas import Analysis, WindowNotes, json_schema_for
+from secondbrain.llm.validated import call_validated
+from secondbrain.schemas import Analysis, WindowNotes
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,6 @@ BUDGET_SAFETY = 0.9  # keep 10% spare because the rule above is rough
 HEADER_RESERVE_CHARS = 500  # title, author and section labels
 MIN_WINDOW_CHARS = 1000
 VOCABULARY_SIZE = 40
-MAX_ATTEMPTS = 2
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 Caller = Callable[[str, str, type[ModelT]], ModelT]
@@ -66,6 +66,7 @@ def analyze_item(
         items.save_analysis(conn, item_id, analysis, provider.name, provider.model, prompts.PROMPT_VERSION)
         items.set_status(conn, item_id, "analyzed")
         links.update_item(conn, settings, item_id)  # tags changed, so link scores changed
+        profile.refresh_derived(conn)  # a finished item's tags feed the skill levels
         items.add_timing(conn, item_id, "analyze", time.perf_counter() - start)
         conn.commit()
     except Exception as exc:
@@ -141,7 +142,7 @@ def _run(
     budget = _window_budget_chars(settings, vocab)
 
     def call(purpose: str, user: str, model: type[ModelT]) -> ModelT:
-        return _call_validated(conn, provider, int(item["id"]), purpose, user, model)
+        return call_validated(conn, provider, purpose, prompts.SYSTEM, user, model, item_id=int(item["id"]))
 
     windows = [" ".join(group) for group in pack(texts, budget)]
     if len(windows) == 1:
@@ -192,42 +193,3 @@ def _collapse(call: Caller, notes: list[str], budget_chars: int) -> list[str]:
 def _format_notes(part: int, notes: WindowNotes) -> str:
     points = "\n".join(f"- {point}" for point in notes.key_points)
     return f"Part {part} summary: {notes.summary}\nPart {part} key points:\n{points}"
-
-
-def _call_validated(
-    conn: sqlite3.Connection,
-    provider: LLMProvider,
-    item_id: int,
-    purpose: str,
-    user: str,
-    model: type[ModelT],
-) -> ModelT:
-    """Ask the LLM, validate the JSON, retry once with the errors. Logs every call."""
-    schema = json_schema_for(model)
-    prompt = user
-    problems = ""
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        start = time.perf_counter()
-        response = provider.generate_json(prompts.SYSTEM, prompt, schema)
-        seconds = time.perf_counter() - start
-        try:
-            parsed: ModelT | None = model.model_validate_json(response.text)
-        except ValidationError as exc:
-            parsed, problems = None, _describe(exc)
-        items.add_llm_call(
-            conn, item_id, purpose, provider.name, provider.model, attempt,
-            parsed is not None, response.input_tokens, response.output_tokens, seconds,
-        )
-        conn.commit()  # the call log survives even if the analysis fails later
-        if parsed is not None:
-            return parsed
-        logger.warning("Item %d: '%s' attempt %d returned invalid output: %s", item_id, purpose, attempt, problems)
-        prompt = user + prompts.retry_suffix(response.text, problems)
-    raise AnalysisError(
-        f"The model returned invalid output {MAX_ATTEMPTS} times for step '{purpose}': {problems}"
-    )
-
-
-def _describe(exc: ValidationError) -> str:
-    parts = [f"{'.'.join(str(p) for p in err['loc']) or 'document'}: {err['msg']}" for err in exc.errors()]
-    return "; ".join(parts)[:500]

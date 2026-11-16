@@ -9,7 +9,7 @@ required fields and descriptions.
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 Difficulty = Literal["beginner", "intermediate", "advanced"]
 
@@ -124,9 +124,71 @@ def _check_key_points(value: list[str], minimum: int) -> list[str]:
     return points
 
 
+MAX_REASON_CHARS = 300
+
+
+class Recommendation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: int = Field(description="The id of one of the listed items.")
+    reason: str = Field(
+        description="One sentence, at most 25 words: why this item, and why at this point."
+    )
+
+    @field_validator("reason")
+    @classmethod
+    def _reason(cls, value: str) -> str:
+        value = " ".join(value.split())
+        if not value:
+            raise ValueError("reason must not be empty")
+        if len(value) > MAX_REASON_CHARS:
+            raise ValueError(f"reason is too long ({len(value)} chars, max {MAX_REASON_CHARS})")
+        return value
+
+
+class RecommendationList(BaseModel):
+    """Ordered study suggestions. Validation context may carry 'allowed_ids' and 'limit'."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    recommendations: list[Recommendation] = Field(
+        description="The chosen items, in the order they should be studied."
+    )
+
+    @model_validator(mode="after")
+    def _check_ids(self, info: ValidationInfo) -> "RecommendationList":
+        ids = [r.item_id for r in self.recommendations]
+        context = info.context or {}
+        if not ids:
+            raise ValueError("at least one recommendation is required")
+        if len(set(ids)) != len(ids):
+            raise ValueError("an item_id appears more than once")
+        allowed = context.get("allowed_ids")
+        if allowed is not None and (unknown := sorted(set(ids) - set(allowed))):
+            raise ValueError(f"item_id not in the list of items: {unknown}. Allowed ids: {allowed}")
+        limit = context.get("limit")
+        if limit is not None and len(ids) > limit:
+            raise ValueError(f"at most {limit} recommendations allowed, got {len(ids)}")
+        return self
+
+
 def json_schema_for(model: type[BaseModel]) -> dict[str, Any]:
-    """JSON Schema for a model, without the 'title' annotations Pydantic adds."""
-    return _strip_titles(model.model_json_schema())
+    """Plain JSON Schema for a model: no 'title' annotations, nested models written inline."""
+    schema = model.model_json_schema()
+    definitions = schema.pop("$defs", {})
+    return _strip_titles(_inline_refs(schema, definitions))
+
+
+def _inline_refs(node: Any, definitions: dict[str, Any]) -> Any:
+    """Replace {"$ref": "#/$defs/X"} with the definition of X."""
+    if isinstance(node, dict):
+        if "$ref" in node:
+            name = str(node["$ref"]).rsplit("/", 1)[-1]
+            return _inline_refs(definitions[name], definitions)
+        return {key: _inline_refs(value, definitions) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_inline_refs(value, definitions) for value in node]
+    return node
 
 
 def _strip_titles(node: Any) -> Any:

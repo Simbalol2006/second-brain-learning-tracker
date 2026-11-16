@@ -109,6 +109,21 @@ MIGRATIONS: list[str] = [
         CHECK (item_a < item_b)
     );
     """,
+    # 4 (Phase 4): the learner profile. Progress itself lives in items.progress_status.
+    """
+    CREATE TABLE profile_skills (
+        topic_id INTEGER PRIMARY KEY REFERENCES topics(id) ON DELETE CASCADE,
+        level INTEGER NOT NULL CHECK (level BETWEEN 0 AND 3),
+        source TEXT NOT NULL CHECK (source IN ('manual', 'derived')),
+        evidence_count INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE profile_goals (
+        id INTEGER PRIMARY KEY,
+        text TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    """,
 ]
 
 

@@ -33,6 +33,10 @@ class LLMError(SecondBrainError):
     """The LLM provider is misconfigured, unreachable, or returned an unusable response."""
 
 
+class LLMOutputError(LLMError):
+    """The LLM answered, but not with valid JSON for the schema, even after a retry."""
+
+
 class AnalysisError(SecondBrainError):
     """Analysis of an item failed. The reason is also stored on the item."""
 
