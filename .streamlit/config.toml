@@ -1,0 +1,5 @@
+# Streamlit settings for this project.
+
+[browser]
+# Do not send usage statistics to Streamlit.
+gatherUsageStats = false

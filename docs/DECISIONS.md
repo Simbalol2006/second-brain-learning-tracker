@@ -283,3 +283,49 @@ Format: **What / Why / Alternatives / Trade-off.**
 - **Why:** nothing uses an inactive goal, and one status column per item is all tracking needs.
 - **Alternatives:** soft-delete goals; a progress history table.
 - **Trade-off:** no history of when an item moved between states, only when it was finished.
+
+---
+
+## Phase 5 — Streamlit UI
+
+### D45. One Streamlit script; the UI only calls the core package
+- **What:** `app/streamlit_app.py` has one function per page. Each draws widgets and calls the same functions the CLI uses (`pipeline`, `analyze`, `search`, `links`, `profile`, `recommend`). Streamlit-free helpers (table rows, filters, graph text) are in `secondbrain/ui.py`.
+- **Why:** there is one implementation of every feature, already tested in Phases 1–4, and the UI file stays readable for someone new to frontend work.
+- **Alternatives:** a FastAPI backend plus a JavaScript frontend; logic inside the page functions.
+- **Trade-off:** the UI and the Python process are one thing: a long operation blocks the page.
+
+### D46. Navigation by a sidebar radio button and `st.session_state`
+- **What:** the current page is the radio's value (`key="page"`); buttons switch page through a small `go_to()` callback. The open item is remembered in `current_item`, separate from the drop-down's own state, because Streamlit forgets a widget's state when the widget is not drawn.
+- **Why:** it is the simplest pattern, works in one file, and can be driven by Streamlit's headless test tool.
+- **Alternatives:** `st.navigation` / a `pages/` folder (gives each page a URL).
+- **Trade-off:** no per-page URLs, so no bookmarking a page and no browser back button between pages.
+
+### D47. Heavy objects are cached once; the database connection is per redraw
+- **What:** settings, the embedding model and the LLM provider are created once with `st.cache_resource`. A SQLite connection is opened at the start of every script run and closed at the end.
+- **Why:** loading the embedding model takes seconds, so it must not happen on every click. SQLite connections are cheap and are tied to the thread that created them, while Streamlit runs each redraw on its own thread.
+- **Alternatives:** one shared connection with `check_same_thread=False`.
+- **Trade-off:** a change to `.env` needs an app restart.
+
+### D48. Graph view with Graphviz inside Streamlit, not pyvis
+- **What:** `ui.graph_dot()` builds Graphviz DOT text; the page shows it with `st.graphviz_chart`, passed as a `graphviz.Source` so the force-directed `neato` engine is used (a plain string always gets the top-down `dot` engine). Nodes are coloured by progress or difficulty, marked ✓/▶, and link to the source; a "focus" option shows one item's neighbourhood.
+- **Why:** Streamlit renders Graphviz itself, in the browser, with no internet and no extra JavaScript; the only new dependency is the small `graphviz` Python package. The DOT text comes from a pure function that is unit-tested. DESIGN.md planned pyvis, which adds a JavaScript bundle and several dependencies for the same picture.
+- **Alternatives:** pyvis (draggable nodes); `streamlit-agraph`; Plotly.
+- **Trade-off:** nodes cannot be dragged and clicking a node opens the source URL rather than the item page. **How the picture actually looks was not checked in the build environment (no browser there).**
+
+### D49. LLM calls happen only on an explicit button
+- **What:** analysis runs on "Save" (if the box is ticked) or "Analyze"; recommendations run on "What should I learn next?" and the result is kept in `st.session_state` until asked again.
+- **Why:** Streamlit re-runs the whole script on every interaction; without this, every click would cost an LLM call.
+- **Alternatives:** time-based caching of recommendations.
+- **Trade-off:** recommendations on screen can be stale after you mark something done; press the button again.
+
+### D50. The app is tested headless on every page
+- **What:** `tests/test_app.py` uses Streamlit's `AppTest` to run the real script with a temp database, a fake embedder and a fake LLM: every page with an empty and a seeded database, plus the main actions (save, filter, open, progress change, analyze, search, recommend, profile edits, error display).
+- **Why:** it catches exceptions and wrong wiring without a browser, which the build environment does not have.
+- **Alternatives:** browser automation (Playwright); manual testing only.
+- **Trade-off:** it proves the script runs and shows the right text, not that the layout looks good or that the graph draws.
+
+### D51. Streamlit usage statistics are switched off
+- **What:** `.streamlit/config.toml` sets `gatherUsageStats = false`.
+- **Why:** the brief says everything runs on the laptop except the LLM call.
+- **Alternatives:** leave Streamlit's default (on).
+- **Trade-off:** none.

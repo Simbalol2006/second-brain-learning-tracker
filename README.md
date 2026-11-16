@@ -3,9 +3,9 @@
 Save long learning content (mostly YouTube), understand it, link related items, and get
 "what to learn next" suggestions. Everything runs on your laptop except the LLM call.
 
-**Status: Phase 4 of 6 — everything except the UI and the evaluation.** You can save a URL,
-have an LLM summarize and tag it, search by meaning, see related items, track your progress and
-get "what to learn next" suggestions. All of it runs from the command line for now.
+**Status: Phase 5 of 6 — all features, with a web UI. Only the evaluation is left.** You can
+save a URL, have an LLM summarize and tag it, search by meaning, see related items and a graph,
+track your progress and get "what to learn next" suggestions, from the browser or the command line.
 Design: [docs/DESIGN.md](docs/DESIGN.md) · Decisions: [docs/DECISIONS.md](docs/DECISIONS.md) ·
 Phase notes: [docs/phases/](docs/phases/)
 
@@ -30,7 +30,19 @@ cp .env.example .env    # then add your ANTHROPIC_API_KEY (or switch to Ollama, 
 `uv sync` downloads Python 3.12 itself (see `.python-version`); the system Python is not touched.
 The first `sb ingest` downloads the embedding model (about 70 MB) into `data/models/`.
 
-## Run
+## Run the app
+
+```bash
+uv run streamlit run app/streamlit_app.py     # opens http://localhost:8501 in your browser
+```
+
+Pages (sidebar): **Add** a URL · **Library** with filters · **Item** (summary, progress, related
+items, analyze/transcribe buttons) · **Search** · **Graph** · **Recommend** · **Profile**.
+The first search or save loads the embedding model, which takes a few seconds. Saving and
+analyzing run while the page waits; for many URLs or long Whisper jobs the command line is
+more comfortable. Stop the app with Ctrl+C in the terminal.
+
+## Run from the command line
 
 ```bash
 uv run sb ingest "https://www.youtube.com/watch?v=VIDEO_ID"   # save one video
