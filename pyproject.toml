@@ -1,0 +1,42 @@
+[project]
+name = "secondbrain"
+version = "0.1.0"
+description = "Second Brain: save long learning content, understand it, link it, and get what-to-learn-next suggestions."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastembed",
+    "numpy",
+    "pydantic-settings",
+    "sqlite-vec",
+    "trafilatura",
+    "typer",
+    "youtube-transcript-api>=1.0",
+    "yt-dlp[default]",
+]
+
+[project.optional-dependencies]
+whisper = ["faster-whisper"]
+whisper-gpu = [
+    "faster-whisper",
+    "nvidia-cublas-cu12; sys_platform == 'linux'",
+    "nvidia-cudnn-cu12>=9,<10; sys_platform == 'linux'",
+]
+
+[project.scripts]
+sb = "secondbrain.cli:app"
+
+[dependency-groups]
+dev = ["pytest"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/secondbrain"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not live'"
+markers = ["live: needs internet, YouTube access or model downloads; run on the laptop with -m live"]
