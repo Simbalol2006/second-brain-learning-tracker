@@ -1,6 +1,6 @@
 # Second Brain — Design Doc (Phase 0)
 
-Status: **draft, waiting for approval** · Date: 2026-11-16 · No code written yet.
+Status: **approved 2026-11-16** · This is the original plan, kept as written. Where the build differs, [DECISIONS.md](DECISIONS.md) and the phase notes say what changed and why.
 
 ---
 

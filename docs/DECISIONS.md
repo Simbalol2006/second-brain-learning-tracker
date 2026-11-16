@@ -329,3 +329,61 @@ Format: **What / Why / Alternatives / Trade-off.**
 - **Why:** the brief says everything runs on the laptop except the LLM call.
 - **Alternatives:** leave Streamlit's default (on).
 - **Trade-off:** none.
+
+---
+
+## Phase 6 — Evaluation and polish
+
+### D52. The report is generated; missing parts say "Not run"
+- **What:** `scripts/eval.py` calls `evaluation.run()`, which returns one `Section` per area, and writes `docs/EVAL.md` from them. A section that cannot be measured (no labels, unknown URL, no LLM, no data) carries a reason instead of numbers. The committed `docs/EVAL.md` is a placeholder with no metrics, and a test checks that.
+- **Why:** the rule for this project is "only real measured numbers". Making the script the only writer, and giving it no way to fill gaps, enforces that mechanically.
+- **Alternatives:** a hand-written results page; default values for missing parts.
+- **Trade-off:** until the script is run on a real library there are no results to show.
+
+### D53. Every count is shown next to every rate
+- **What:** rates are printed as `0.750 (3/4)`; a rate with nothing to divide by is `n/a (0/0)`. The report states that the label sets are small and, for linking, that the pairs are a stratified sample.
+- **Why:** with 25 queries or 30 pairs a single label moves a metric by several points; the reader needs the denominators to judge that.
+- **Alternatives:** confidence intervals (hard to read, and shaky at these sizes).
+- **Trade-off:** tables are a little wider.
+
+### D54. Retrieval: recall@5 and MRR over items, latency measured warm
+- **What:** results are item-level. recall@5 = relevant items in the top 5 ÷ all relevant items; MRR uses the first relevant item within the top 20, else 0; both are means over queries. Latency times `search()` with the model already loaded, a set number of times per query, and reports p50 and p95.
+- **Why:** these are the metrics the brief asks for, defined so they can be recomputed by hand from the per-query table in the report.
+- **Alternatives:** chunk-level relevance labels; nDCG.
+- **Trade-off:** latency excludes model loading (a one-time cost that the CLI pays on every call) and UI rendering.
+
+### D55. Linking is scored from the formula and the configured threshold
+- **What:** for each labelled pair the score is recomputed with `pair_score()` and compared with `LINK_THRESHOLD`; the stored `links` table is not consulted. A second table shows precision and recall at other thresholds, marked "for information only".
+- **Why:** the result then depends only on the configuration printed in the report, not on whether `sb links --rebuild` was run. The sweep helps explain a result without pretending it is an unbiased estimate.
+- **Alternatives:** read stored links; omit the sweep to remove the temptation to tune.
+- **Trade-off:** the sweep is tuning information; the report says that choosing from it is tuning on the eval set.
+
+### D56. Faithfulness is judged per claim, by an LLM, against a written rubric
+- **What:** each summary is split into sentences and key points ("claims"). The judge gets `eval/RUBRIC.md` as its instructions, the source text and the numbered claims, and must return exactly one verdict per claim (`supported` / `not_supported` / `contradicted`). Faithfulness = supported ÷ all claims. The judge goes through the same provider interface; `--judge-model` picks a different model than the app's.
+- **Why:** claim-level verdicts are checkable by a person, unlike a 1–5 score. Requiring one verdict per claim number (validated, with a retry) stops the judge from skipping claims.
+- **Alternatives:** a single score per summary; NLI models; embedding similarity.
+- **Trade-off:** an LLM judge can be wrong, and shares blind spots with the summarizer when both use the same model (the default). The human spot check exists to measure that.
+
+### D57. Long sources are judged part by part
+- **What:** if the source does not fit the judge's input budget, each part is judged separately: a claim is supported if any part supports it, else contradicted if any part contradicts it, else not supported.
+- **Why:** it checks claims against the whole source and still works with a small local model.
+- **Alternatives:** judge against the top retrieved chunks per claim (cheaper, but can miss the supporting passage).
+- **Trade-off:** more judge calls for long items; a claim that combines facts from two parts can be marked not supported.
+
+### D58. The human spot check is blind, and judge verdicts are cached
+- **What:** the first run writes `eval/spot_check.yaml` with the claims of the items marked `spot_check: true` and an empty `human:` field, without the judge's verdicts. Later runs report exact agreement and supported/not-supported agreement. Verdicts are cached in `data/eval_judge_cache.json`, keyed by judge model, rubric text, URL and claims.
+- **Why:** seeing the judge's answer first would bias the human label. The cache keeps the second run (after labelling) free and makes sure the agreement is computed against the same verdicts that produced the faithfulness number.
+- **Alternatives:** show verdicts for review (faster, but anchored); no cache.
+- **Trade-off:** changing the rubric, the judge model or a summary invalidates the cached verdicts for it, as it should.
+
+### D59. Speed comes from timings recorded at ingest
+- **What:** the speed section reads `ingest_timings` (the latest run of each stage per item) and `llm_calls`; the eval does not re-ingest anything.
+- **Why:** these are real measurements of real use and cost nothing extra; re-downloading 30 videos during an eval would be slow and would hit YouTube for no reason.
+- **Alternatives:** time a fresh ingest of a fixed list inside the eval.
+- **Trade-off:** the items may have been saved on different days, networks or settings; the report says so.
+
+### D60. Items can be deleted
+- **What:** `library.delete_item()` removes the item row (transcript, chunks, analysis, tags, links and timings go with it through foreign keys), its vectors, and recomputes derived skills. Available as `sb delete` and on the Item page behind a confirmation tick.
+- **Why:** a wrong or failed save could not be removed, which also made it awkward to keep the eval library clean.
+- **Alternatives:** a hidden/archived flag.
+- **Trade-off:** deletion is permanent; unused tag names stay in the `topics` table.

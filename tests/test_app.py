@@ -255,3 +255,15 @@ def test_invalid_configuration_is_shown(monkeypatch: pytest.MonkeyPatch) -> None
     app.run()
     assert not app.exception
     assert "Invalid configuration" in text_of(app)
+
+
+def test_item_delete_needs_confirmation(seeded: dict[str, int], tmp_path: Path) -> None:
+    app = open_page("Item", current_item=seeded["ml"])
+    assert app.button(key="item_delete").disabled
+    app.checkbox(key=f"delete_sure_{seeded['ml']}").check().run()
+    app.button(key="item_delete").click().run()
+    assert not app.exception
+    assert app.subheader[0].value == "Baking bread"  # the remaining item is shown
+    conn = database(tmp_path)
+    assert [int(r["id"]) for r in items.list_all(conn)] == [seeded["bread"]]
+    conn.close()

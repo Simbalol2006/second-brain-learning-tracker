@@ -312,3 +312,19 @@ def test_status_and_profile_errors() -> None:
     assert runner.invoke(cli.app, ["profile", "set-skill", "python", "9"]).exit_code == 1
     assert runner.invoke(cli.app, ["profile", "remove-goal", "3"]).exit_code == 1
     assert runner.invoke(cli.app, ["profile", "remove-skill", "nothing"]).exit_code == 1
+
+
+def test_delete_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_fake_llm(monkeypatch, [ANSWER, ANSWER])
+    ingest_two(monkeypatch)
+    runner.invoke(cli.app, ["analyze", "--all"])
+    runner.invoke(cli.app, ["status", "1", "done"])
+
+    declined = runner.invoke(cli.app, ["delete", "1"], input="n\n")
+    assert declined.exit_code == 1 and "Video dQw" in runner.invoke(cli.app, ["list"]).output
+
+    deleted = runner.invoke(cli.app, ["delete", "1", "--yes"])
+    assert deleted.exit_code == 0 and "item 1 deleted" in deleted.output
+    assert "Video dQw" not in runner.invoke(cli.app, ["list"]).output
+    assert "(derived" not in runner.invoke(cli.app, ["profile", "show"]).output  # its skills are gone too
+    assert "No item with id 1" in runner.invoke(cli.app, ["delete", "1", "--yes"]).output

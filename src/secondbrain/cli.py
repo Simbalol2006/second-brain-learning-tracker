@@ -11,7 +11,7 @@ import typer
 from pydantic import ValidationError
 
 from secondbrain import analyze as analysis
-from secondbrain import db, evalset, items, links, profile
+from secondbrain import db, evalset, items, library, links, profile
 from secondbrain import recommend as recommending
 from secondbrain import search as searching
 from secondbrain.config import Settings
@@ -287,6 +287,23 @@ def eval_templates(
     for path in written:
         typer.echo(f"Wrote {path}")
     typer.echo("Next: fill them in as described in eval/README.md.")
+
+
+@app.command()
+def delete(
+    item_id: Annotated[int, typer.Argument(help="Item id from 'sb list'.")],
+    yes: Annotated[bool, typer.Option("--yes", help="Do not ask for confirmation.")] = False,
+) -> None:
+    """Delete an item with its transcript, analysis, vectors and links."""
+    _, conn = _open()
+    try:
+        title = items.get(conn, item_id)["title"] or f"item {item_id}"
+        if not yes:
+            typer.confirm(f"Delete '{title}'? This cannot be undone", abort=True)
+        library.delete_item(conn, item_id)
+    except SecondBrainError as exc:
+        _fail(str(exc))
+    typer.echo(f"item {item_id} deleted")
 
 
 @app.command()

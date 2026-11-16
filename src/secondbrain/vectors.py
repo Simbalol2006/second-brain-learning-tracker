@@ -72,6 +72,14 @@ def has_item_vector(conn: sqlite3.Connection, item_id: int) -> bool:
     return row is not None
 
 
+def delete_item(conn: sqlite3.Connection, item_id: int, chunk_ids: Sequence[int]) -> None:
+    """Remove the vectors of one item and of its chunks."""
+    if not tables_exist(conn):
+        return
+    conn.executemany("DELETE FROM vec_chunks WHERE rowid = ?", [(chunk_id,) for chunk_id in chunk_ids])
+    conn.execute("DELETE FROM vec_items WHERE rowid = ?", (item_id,))
+
+
 def all_item_vectors(conn: sqlite3.Connection) -> tuple[list[int], np.ndarray]:
     """Every item vector: (item ids, matrix with one row per id)."""
     if not tables_exist(conn):

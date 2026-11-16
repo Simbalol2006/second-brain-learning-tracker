@@ -15,7 +15,7 @@ import graphviz
 import streamlit as st
 from pydantic import ValidationError
 
-from secondbrain import analyze, db, items, links, profile, recommend, search, ui, vectors
+from secondbrain import analyze, db, items, library, links, profile, recommend, search, ui, vectors
 from secondbrain.config import Settings
 from secondbrain.embed import Embedder
 from secondbrain.errors import SecondBrainError
@@ -155,6 +155,14 @@ def page_item(conn: sqlite3.Connection, settings: Settings) -> None:
     _item_actions(conn, settings, item_id)
     _item_analysis(conn, item_id)
     _item_related(conn, item_id)
+    with st.expander("Delete this item"):
+        sure = st.checkbox("Yes, delete it with its transcript, analysis and links", key=f"delete_sure_{item_id}")
+        if st.button("Delete", key="item_delete", disabled=not sure):
+            library.delete_item(conn, item_id)
+            st.session_state.pop("current_item", None)
+            st.session_state.pop("search_hits", None)  # may still list the deleted item
+            st.session_state.pop("recs", None)
+            st.rerun()
 
 
 def _item_actions(conn: sqlite3.Connection, settings: Settings, item_id: int) -> None:
