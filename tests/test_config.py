@@ -17,7 +17,7 @@ def test_defaults(settings: Settings) -> None:
 def test_env_overrides(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CHUNK_WORDS", "100")
     monkeypatch.setenv("CAPTION_LANGUAGES", "en, hi")
-    monkeypatch.setenv("LLM_PROVIDER", "ollama")  # unknown keys from later phases are ignored
+    monkeypatch.setenv("SOME_FUTURE_SETTING", "x")  # unknown keys are ignored
     loaded = Settings(_env_file=None)
     assert loaded.chunk_words == 100
     assert loaded.caption_language_list == ["en", "hi"]
@@ -37,3 +37,24 @@ def test_overlap_must_be_smaller_than_chunk() -> None:
 def test_bad_whisper_device_rejected() -> None:
     with pytest.raises(ValidationError):
         Settings(whisper_device="tpu", _env_file=None)
+
+
+def test_llm_defaults(settings: Settings) -> None:
+    assert settings.llm_provider == "anthropic"
+    assert settings.llm_model_name == "claude-haiku-5-5"
+    assert settings.anthropic_api_key is None
+
+
+def test_llm_model_override() -> None:
+    assert Settings(llm_model="some-other-model", _env_file=None).llm_model_name == "some-other-model"
+
+
+def test_ollama_needs_a_model_name() -> None:
+    with pytest.raises(ValidationError, match="LLM_MODEL must name an Ollama model"):
+        Settings(llm_provider="ollama", _env_file=None)
+    assert Settings(llm_provider="ollama", llm_model="m:3b", _env_file=None).llm_model_name == "m:3b"
+
+
+def test_api_key_is_not_shown_in_repr() -> None:
+    loaded = Settings(anthropic_api_key="sk-secret-value", _env_file=None)
+    assert "sk-secret-value" not in repr(loaded)

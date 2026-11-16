@@ -6,6 +6,7 @@ from dataclasses import asdict
 
 from secondbrain.errors import StorageError
 from secondbrain.models import Chunk, Metadata, Segment, Transcript
+from secondbrain.schemas import Analysis
 
 
 def get_or_create(
@@ -104,6 +105,112 @@ def add_timing(conn: sqlite3.Connection, item_id: int, stage: str, seconds: floa
         "INSERT INTO ingest_timings (item_id, stage, seconds) VALUES (?, ?, ?)",
         (item_id, stage, seconds),
     )
+
+
+def ids_without_analysis(conn: sqlite3.Connection) -> list[int]:
+    """Items that have a transcript but no stored analysis yet."""
+    rows = conn.execute(
+        """
+        SELECT t.item_id FROM transcripts t
+        LEFT JOIN analyses a ON a.item_id = t.item_id
+        WHERE a.item_id IS NULL ORDER BY t.item_id
+        """
+    ).fetchall()
+    return [int(row[0]) for row in rows]
+
+
+def save_analysis(
+    conn: sqlite3.Connection,
+    item_id: int,
+    analysis: Analysis,
+    provider: str,
+    model: str,
+    prompt_version: str,
+) -> None:
+    """Store the analysis and replace the item's topic and skill tags."""
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO analyses
+            (item_id, summary, key_points_json, difficulty, provider, model, prompt_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            item_id,
+            analysis.summary,
+            json.dumps(analysis.key_points, ensure_ascii=False),
+            analysis.difficulty,
+            provider,
+            model,
+            prompt_version,
+        ),
+    )
+    conn.execute("DELETE FROM item_topics WHERE item_id = ?", (item_id,))
+    for kind, names in (("topic", analysis.topics), ("skill", analysis.skills)):
+        for name in names:
+            conn.execute("INSERT OR IGNORE INTO topics (name) VALUES (?)", (name,))
+            conn.execute(
+                "INSERT OR IGNORE INTO item_topics (item_id, topic_id, kind) "
+                "SELECT ?, id, ? FROM topics WHERE name = ?",
+                (item_id, kind, name),
+            )
+
+
+def load_analysis(conn: sqlite3.Connection, item_id: int) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM analyses WHERE item_id = ?", (item_id,)).fetchone()
+
+
+def load_tags(conn: sqlite3.Connection, item_id: int, kind: str) -> list[str]:
+    rows = conn.execute(
+        "SELECT t.name FROM item_topics it JOIN topics t ON t.id = it.topic_id "
+        "WHERE it.item_id = ? AND it.kind = ? ORDER BY t.name",
+        (item_id, kind),
+    ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def tag_vocabulary(conn: sqlite3.Connection, kind: str, limit: int) -> list[str]:
+    """Most-used tag names of one kind, so the LLM can reuse them."""
+    rows = conn.execute(
+        "SELECT t.name FROM item_topics it JOIN topics t ON t.id = it.topic_id "
+        "WHERE it.kind = ? GROUP BY t.id ORDER BY count(*) DESC, t.name LIMIT ?",
+        (kind, limit),
+    ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def add_llm_call(
+    conn: sqlite3.Connection,
+    item_id: int,
+    purpose: str,
+    provider: str,
+    model: str,
+    attempt: int,
+    valid: bool,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    seconds: float,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO llm_calls
+            (item_id, purpose, provider, model, attempt, valid, input_tokens, output_tokens, seconds)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (item_id, purpose, provider, model, attempt, int(valid), input_tokens, output_tokens, seconds),
+    )
+
+
+def llm_usage(conn: sqlite3.Connection, item_id: int) -> sqlite3.Row:
+    """Totals over all LLM calls made for one item."""
+    return conn.execute(
+        """
+        SELECT count(*) AS calls, coalesce(sum(valid), 0) AS valid_calls,
+               coalesce(sum(input_tokens), 0) AS input_tokens,
+               coalesce(sum(output_tokens), 0) AS output_tokens
+        FROM llm_calls WHERE item_id = ?
+        """,
+        (item_id,),
+    ).fetchone()
 
 
 def load_timings(conn: sqlite3.Connection, item_id: int) -> list[sqlite3.Row]:

@@ -10,6 +10,8 @@ from secondbrain.models import Metadata, Segment, Transcript
 
 logger = logging.getLogger(__name__)
 
+READING_WORDS_PER_MINUTE = 200
+
 
 def fetch(url: str) -> tuple[Metadata, Transcript]:
     """Download the page and extract metadata + paragraphs."""
@@ -35,9 +37,11 @@ def extract(html: str, url: str) -> tuple[Metadata, Transcript]:
     segments = [Segment(text=p) for p in paragraphs if p and p != title]
     if not segments:
         raise FetchError(f"No article text found at {url}. The page may need JavaScript or a login.")
+    words = sum(len(s.text.split()) for s in segments)
     metadata = Metadata(
         title=title,
         author=data.get("author"),
+        duration_sec=round(words / READING_WORDS_PER_MINUTE * 60),  # estimated reading time
         language=data.get("language"),
         published_at=data.get("date"),
     )

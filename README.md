@@ -3,8 +3,9 @@
 Save long learning content (mostly YouTube), understand it, link related items, and get
 "what to learn next" suggestions. Everything runs on your laptop except the LLM call.
 
-**Status: Phase 1 of 6 — ingest + storage.** You can save a URL and it is fetched, chunked,
-embedded and stored. Summaries, search, links, recommendations and the UI come in later phases.
+**Status: Phase 2 of 6 — ingest + understand.** You can save a URL (fetched, chunked, embedded,
+stored) and have an LLM summarize and tag it. Search, links, recommendations and the UI come in
+later phases.
 Design: [docs/DESIGN.md](docs/DESIGN.md) · Decisions: [docs/DECISIONS.md](docs/DECISIONS.md) ·
 Phase notes: [docs/phases/](docs/phases/)
 
@@ -23,7 +24,7 @@ curl -fsSL https://deno.land/install.sh | sh
 # 4. Project
 git clone <your-repo-url> second-brain && cd second-brain
 uv sync                 # installs Python 3.12 and all dependencies into .venv
-cp .env.example .env    # defaults work as they are
+cp .env.example .env    # then add your ANTHROPIC_API_KEY (or switch to Ollama, see below)
 ```
 
 `uv sync` downloads Python 3.12 itself (see `.python-version`); the system Python is not touched.
@@ -36,13 +37,44 @@ uv run sb ingest "https://www.youtube.com/watch?v=VIDEO_ID"   # save one video
 uv run sb ingest "https://example.com/some-article"           # articles work too
 uv run sb ingest --file urls.txt                              # one URL per line, # for comments
 uv run sb list                                                # all saved items
-uv run sb show 1                                              # details + stage timings for item 1
+uv run sb analyze 1                                           # LLM summary, tags, difficulty for item 1
+uv run sb analyze --all                                       # every item not analyzed yet
+uv run sb ingest "<url>" --analyze                            # save and analyze in one go
+uv run sb show 1                                              # details, analysis and stage timings
 uv run sb --help
 ```
 
-Ingest statuses: `embedded` (done for this phase), `no_transcript` (video has no captions),
-`failed` (the reason is printed and stored; run the same `sb ingest` again to retry — finished
-stages are not repeated).
+Statuses: `embedded` (saved and searchable), `analyzed` (also summarized and tagged),
+`no_transcript` (video has no captions), `failed` (the reason is printed and stored; run the same
+command again to retry — finished stages are not repeated).
+
+## The LLM (summaries and tags)
+
+All LLM calls go through one provider interface, chosen in `.env`.
+
+**Anthropic API (default).** Set `ANTHROPIC_API_KEY=...` in `.env`. The default model is the
+low-cost `claude-haiku-5-5`; change it with `LLM_MODEL`.
+
+**Using a local model (Ollama).** Nothing leaves your laptop.
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull llama3.2:3b          # example of a model small enough for 4 GB VRAM
+```
+
+Then in `.env`:
+
+```
+LLM_PROVIDER=ollama
+LLM_MODEL=llama3.2:3b
+LLM_MAX_INPUT_TOKENS=4000
+LLM_MAX_OUTPUT_TOKENS=1024
+```
+
+The model name is only an example and was **not tested in the build environment**; any model
+you have pulled works. Small models make more JSON mistakes: `sb analyze` reports failures, and
+`sb show <id>` shows what was stored. Content longer than `LLM_MAX_INPUT_TOKENS` is summarized
+in parts and then combined, so long videos take several calls.
 
 ### Videos without captions (optional Whisper)
 
@@ -74,7 +106,7 @@ they fail, follow the GPU section of the
 
 ```bash
 uv run pytest            # offline tests, no network needed
-uv run pytest -m live    # live checks: downloads the embedding model
+uv run pytest -m live -s # live checks: downloads the embedding model, makes one small LLM call
 SB_LIVE_YOUTUBE_URL="https://www.youtube.com/watch?v=VIDEO_ID" uv run pytest -m live   # + real YouTube ingest
 ```
 
@@ -92,6 +124,10 @@ All settings live in `.env` (see `.env.example` for the full list with defaults)
 | `No captions in languages ['en']` | The video has no English captions. Use `sb transcribe <id>`, or set `CAPTION_LANGUAGES=en,hi`. |
 | `Could not load the sqlite-vec extension` | You are not using the uv-managed Python. Run commands with `uv run`. |
 | `The database holds vectors from ...` | `EMBEDDING_MODEL` was changed. Change it back, or use a fresh `DATA_DIR` and ingest again. |
+| `ANTHROPIC_API_KEY is not set` | Add the key to `.env`, or switch to Ollama (see "The LLM"). |
+| `Ollama is not reachable` / `does not have the model` | Run `ollama serve`, and `ollama pull <model>`. |
+| `The model returned invalid output 2 times` | The model could not follow the JSON schema. Retry, or use a stronger model. |
+| `ran out of output tokens` / `hit its output limit` | Raise `LLM_MAX_OUTPUT_TOKENS`. |
 | Whisper `libcublas` / `libcudnn` error | Set `WHISPER_DEVICE=cpu`, or complete "Whisper on the GPU". |
 
 Windows is not tested yet; development targets Kubuntu.

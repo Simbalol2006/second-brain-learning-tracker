@@ -10,6 +10,7 @@ from secondbrain.errors import StorageError
 def test_connect_creates_schema(conn: sqlite3.Connection) -> None:
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"items", "transcripts", "chunks", "ingest_timings", "meta"} <= tables
+    assert {"analyses", "topics", "item_topics", "llm_calls"} <= tables
     assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
 
 
@@ -49,3 +50,19 @@ def test_invalid_status_is_rejected(conn: sqlite3.Connection) -> None:
             "INSERT INTO items (source_type, source_id, url, ingest_status) "
             "VALUES ('youtube', 'a', 'u', 'bogus')"
         )
+
+
+def test_phase1_database_is_upgraded_in_place(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    all_migrations = db.MIGRATIONS
+    monkeypatch.setattr(db, "MIGRATIONS", all_migrations[:1])
+    old = db.connect(settings.db_path)
+    old.execute("INSERT INTO items (source_type, source_id, url) VALUES ('youtube', 'a', 'u')")
+    old.commit()
+    old.close()
+
+    monkeypatch.setattr(db, "MIGRATIONS", all_migrations)
+    new = db.connect(settings.db_path)
+    assert new.execute("PRAGMA user_version").fetchone()[0] == len(all_migrations)
+    assert new.execute("SELECT count(*) FROM items").fetchone()[0] == 1
+    assert new.execute("SELECT count(*) FROM analyses").fetchone()[0] == 0
+    new.close()

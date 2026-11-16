@@ -29,6 +29,14 @@ class EmbeddingError(SecondBrainError):
     """The embedding model could not be loaded or run."""
 
 
+class LLMError(SecondBrainError):
+    """The LLM provider is misconfigured, unreachable, or returned an unusable response."""
+
+
+class AnalysisError(SecondBrainError):
+    """Analysis of an item failed. The reason is also stored on the item."""
+
+
 class IngestError(SecondBrainError):
     """An ingest stage failed. The reason is also stored on the item."""
 

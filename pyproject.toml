@@ -5,7 +5,9 @@ description = "Second Brain: save long learning content, understand it, link it,
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "anthropic>=2.8.0",
     "fastembed",
+    "httpx>=0.28.1",
     "numpy",
     "pydantic-settings",
     "sqlite-vec",

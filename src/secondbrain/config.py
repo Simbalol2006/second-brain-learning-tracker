@@ -3,8 +3,11 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+DEFAULT_ANTHROPIC_MODEL = "claude-haiku-5-5"
 
 
 class Settings(BaseSettings):
@@ -24,11 +27,32 @@ class Settings(BaseSettings):
     whisper_device: Literal["auto", "cpu", "cuda"] = "cpu"
     whisper_compute_type: str = "int8"
 
+    llm_provider: Literal["anthropic", "ollama"] = "anthropic"
+    llm_model: str = ""
+    llm_max_input_tokens: int = Field(default=12000, ge=1000)
+    llm_max_output_tokens: int = Field(default=4096, ge=256)
+    anthropic_api_key: SecretStr | None = None
+    ollama_host: str = "http://localhost:11434"
+
     @model_validator(mode="after")
     def _check_overlap(self) -> "Settings":
         if self.chunk_overlap_words >= self.chunk_words:
             raise ValueError("CHUNK_OVERLAP_WORDS must be smaller than CHUNK_WORDS")
         return self
+
+    @model_validator(mode="after")
+    def _check_llm_model(self) -> "Settings":
+        if self.llm_provider == "ollama" and not self.llm_model.strip():
+            raise ValueError(
+                "LLM_MODEL must name an Ollama model you have pulled when LLM_PROVIDER=ollama "
+                "(see README, 'Using a local model')"
+            )
+        return self
+
+    @property
+    def llm_model_name(self) -> str:
+        """The model to call: LLM_MODEL, or the low-cost Anthropic default."""
+        return self.llm_model.strip() or DEFAULT_ANTHROPIC_MODEL
 
     @property
     def db_path(self) -> Path:

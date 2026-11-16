@@ -4,6 +4,7 @@ import hashlib
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -11,6 +12,7 @@ import pytest
 from secondbrain import db
 from secondbrain.config import Settings
 from secondbrain.embed import normalize
+from secondbrain.llm.base import LLMResponse
 from secondbrain.models import Segment
 
 
@@ -31,6 +33,26 @@ class FakeEmbedder:
                 digest = hashlib.md5(word.encode()).digest()
                 out[i, digest[0] % self.dim] += 1.0
         return normalize(out)
+
+
+class FakeProvider:
+    """Scripted LLM: returns the given answers in order and records every prompt."""
+
+    name = "fake"
+    model = "fake-model"
+
+    def __init__(self, answers: list[str | Exception]) -> None:
+        self.answers = list(answers)
+        self.calls: list[dict[str, Any]] = []
+
+    def generate_json(self, system: str, user: str, schema: dict[str, Any]) -> LLMResponse:
+        self.calls.append({"system": system, "user": user, "schema": schema})
+        if not self.answers:
+            raise AssertionError("FakeProvider was called more often than scripted")
+        answer = self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return LLMResponse(answer, input_tokens=100, output_tokens=20)
 
 
 @pytest.fixture

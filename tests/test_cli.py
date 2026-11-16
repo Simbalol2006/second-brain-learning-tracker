@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from conftest import FakeEmbedder, make_segments
+from conftest import FakeEmbedder, FakeProvider, make_segments
 from typer.testing import CliRunner
 
 from secondbrain import cli
@@ -19,6 +19,7 @@ URL = "https://youtu.be/dQw4w9WgXcQ"
 def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr(cli, "FastEmbedEmbedder", lambda model, cache_dir: FakeEmbedder())
     monkeypatch.setattr(
         pipeline.youtube, "fetch_metadata", lambda video_id: Metadata(title="A talk", duration_sec=630)
@@ -108,3 +109,70 @@ def test_bad_config_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
     result = runner.invoke(cli.app, ["list"])
     assert result.exit_code == 1
     assert "Invalid configuration" in result.output
+
+
+ANSWER = (
+    '{"summary": "It explains things.", "key_points": ["One.", "Two."], '
+    '"topics": ["vector search"], "skills": [], "difficulty": "beginner"}'
+)
+
+
+def use_fake_llm(monkeypatch: pytest.MonkeyPatch, answers: list[str | Exception]) -> FakeProvider:
+    provider = FakeProvider(answers)
+    monkeypatch.setattr(cli, "build_provider", lambda settings: provider)
+    return provider
+
+
+def test_analyze_one_item_and_show_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_fake_llm(monkeypatch, [ANSWER])
+    runner.invoke(cli.app, ["ingest", URL])
+    result = runner.invoke(cli.app, ["analyze", "1"])
+    assert result.exit_code == 0, result.output
+    assert "item 1: analyzed - beginner, topics: vector search" in result.output
+    assert "tokens in/out: 100/20" in result.output
+
+    shown = runner.invoke(cli.app, ["show", "1"]).output
+    assert "summary            It explains things." in shown
+    assert "key point          Two." in shown
+    assert "analyzed" in runner.invoke(cli.app, ["list"]).output
+
+
+def test_ingest_with_analyze_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = use_fake_llm(monkeypatch, [ANSWER])
+    result = runner.invoke(cli.app, ["ingest", URL, "--analyze"])
+    assert result.exit_code == 0, result.output
+    assert "item 1: embedded" in result.output and "item 1: analyzed" in result.output
+    assert len(provider.calls) == 1
+
+
+def test_analyze_all_only_touches_pending_items(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = use_fake_llm(monkeypatch, [ANSWER, ANSWER])
+    runner.invoke(cli.app, ["ingest", URL])
+    runner.invoke(cli.app, ["ingest", "https://youtu.be/aaaaaaaaaaa"])
+    first = runner.invoke(cli.app, ["analyze", "--all"])
+    assert first.exit_code == 0, first.output
+    assert len(provider.calls) == 2
+    second = runner.invoke(cli.app, ["analyze", "--all"])
+    assert "Nothing to analyze" in second.output
+
+
+def test_analyze_failure_is_visible(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_fake_llm(monkeypatch, ["nope", "nope"])
+    runner.invoke(cli.app, ["ingest", URL])
+    result = runner.invoke(cli.app, ["analyze", "1"])
+    assert result.exit_code == 1
+    assert "FAILED" in result.output and "invalid output 2 times" in result.output
+    assert "failed" in runner.invoke(cli.app, ["list"]).output
+
+
+def test_analyze_without_api_key_explains_what_to_set() -> None:
+    runner.invoke(cli.app, ["ingest", URL])
+    result = runner.invoke(cli.app, ["analyze", "1"])
+    assert result.exit_code == 1
+    assert "ANTHROPIC_API_KEY is not set" in result.output
+
+
+def test_analyze_needs_an_id_or_all() -> None:
+    result = runner.invoke(cli.app, ["analyze"])
+    assert result.exit_code == 1
+    assert "Give an item id, or --all" in result.output

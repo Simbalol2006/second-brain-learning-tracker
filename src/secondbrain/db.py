@@ -60,6 +60,42 @@ MIGRATIONS: list[str] = [
         value TEXT NOT NULL
     );
     """,
+    # 2 (Phase 2): LLM analysis, topic/skill tags, and a log of every LLM call.
+    """
+    CREATE TABLE analyses (
+        item_id INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+        summary TEXT NOT NULL,
+        key_points_json TEXT NOT NULL,
+        difficulty TEXT NOT NULL CHECK (difficulty IN ('beginner', 'intermediate', 'advanced')),
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE topics (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE
+    );
+    CREATE TABLE item_topics (
+        item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+        topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind IN ('topic', 'skill')),
+        PRIMARY KEY (item_id, topic_id, kind)
+    );
+    CREATE TABLE llm_calls (
+        id INTEGER PRIMARY KEY,
+        item_id INTEGER REFERENCES items(id) ON DELETE SET NULL,
+        purpose TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        valid INTEGER NOT NULL CHECK (valid IN (0, 1)),
+        input_tokens INTEGER,
+        output_tokens INTEGER,
+        seconds REAL NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    """,
 ]
 
 

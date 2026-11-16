@@ -14,11 +14,12 @@ def test_extract_gets_metadata_and_paragraphs() -> None:
     assert meta.title == "How Vector Search Works"
     assert meta.author == "Test Author"
     assert meta.published_at == "2026-03-04"
-    assert meta.duration_sec is None
     assert transcript.source == "article"
     assert len(transcript.segments) == 4
     assert transcript.segments[0].text.startswith("Vector search finds documents")
     assert all(s.start is None and s.end is None for s in transcript.segments)
+    words = sum(len(s.text.split()) for s in transcript.segments)
+    assert meta.duration_sec == round(words / 200 * 60) > 0  # estimated reading time
 
 
 def test_extract_drops_navigation_and_footer() -> None:
