@@ -267,3 +267,15 @@ def test_item_delete_needs_confirmation(seeded: dict[str, int], tmp_path: Path) 
     conn = database(tmp_path)
     assert [int(r["id"]) for r in items.list_all(conn)] == [seeded["bread"]]
     conn.close()
+
+
+def test_search_page_mode_choice(seeded: dict[str, int]) -> None:
+    app = open_page("Search")
+    assert app.radio(key="search_mode").value == "hybrid"
+    app.text_input(key="search_query").set_value("sourdough bread fermentation")
+    app.radio(key="search_mode").set_value("bm25")
+    app.button[0].click().run()
+    assert not app.exception
+    shown = text_of(app)
+    assert "**1. [Baking bread](https://www.youtube.com/watch?v=bbbbbbbbbbb&t=" in shown
+    assert "· BM25 " in shown

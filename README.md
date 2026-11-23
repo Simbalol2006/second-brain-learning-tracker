@@ -8,12 +8,12 @@ and that can be switched to a local model.
 |---------|--------------|
 | **Save** | Paste a YouTube or article URL: metadata and transcript are fetched, chunked and embedded. Videos without captions can be transcribed locally with Whisper. |
 | **Understand** | Summary, key points, topic and skill tags, difficulty — LLM output as schema-validated JSON. |
-| **Search** | Semantic search over everything saved, with the matching passage and a timestamp link. |
+| **Search** | Hybrid search over everything saved: by meaning (embeddings) and by keywords (BM25), merged by rank. Shows the matching passage and a timestamp link. |
 | **Connect** | Related items from text similarity and shared tags, plus a graph view. |
 | **Recommend** | What to learn next, in order, with a one-line reason each, based on your goals, skills and finished items. |
 | **Track** | to watch / watching / done. Finishing an item updates your skill levels. |
 
-**Project status.** All six build phases are complete and covered by offline tests. Two things
+**Project status.** All seven build phases are complete and covered by offline tests. Two things
 are still open and need your machine: the live checks listed in
 [docs/phases/](docs/phases/) (real YouTube, real LLM, the UI in a browser), and the evaluation
 numbers in [docs/EVAL.md](docs/EVAL.md), which only `scripts/eval.py` may write.
@@ -72,7 +72,8 @@ uv run sb show 1                                              # details, analysi
 uv run sb delete 1                                            # remove an item completely
 
 # Find and connect
-uv run sb search "how do embeddings work"                     # best passage per item
+uv run sb search "how do embeddings work"                     # best passage per item (hybrid)
+uv run sb search "tsvector" --mode bm25                       # keywords only; or --mode dense
 uv run sb related 1                                           # items linked to item 1
 uv run sb graph --out graph.json                              # nodes + edges as JSON
 
@@ -143,6 +144,17 @@ they fail, follow the GPU section of the
 [faster-whisper README](https://github.com/SYSTRAN/faster-whisper#gpu) and set
 `WHISPER_DEVICE=cpu` meanwhile.
 
+## Search modes
+
+| Mode | How it ranks | Good at |
+|------|--------------|---------|
+| `dense` | cosine similarity of embeddings (sqlite-vec) | the meaning, in other words than the content uses |
+| `bm25` | BM25 keyword score (SQLite FTS5) | exact terms: names, acronyms, library names, error messages |
+| `hybrid` (default) | both lists merged with reciprocal rank fusion: `Σ 1 / (RRF_K + rank)` | both |
+
+Set the default with `SEARCH_MODE` in `.env`. The evaluation compares all three on your labels;
+the defaults (`RRF_K=60`, `SEARCH_DEPTH=50`) are **not tuned on real data**.
+
 ## Related items
 
 Two items are linked when `0.7 x text similarity + 0.3 x shared tags` reaches `LINK_THRESHOLD`
@@ -175,7 +187,8 @@ uv run sb eval-templates              # create the label files from your saved i
 uv run python scripts/eval.py         # measure, and write docs/EVAL.md
 ```
 
-The script reports retrieval recall@5 and MRR, linking precision and recall, summary
+The script reports retrieval recall@5 and MRR (for the configured search mode, plus a
+comparison of dense, bm25 and hybrid on the same queries), linking precision and recall, summary
 faithfulness (LLM judge with the rubric in `eval/RUBRIC.md`, plus agreement with your own spot
 check), ingest time per stage, search latency p50/p95 and the LLM's JSON-validity rate — with
 the date, commit, machine and configuration of the run. Anything it cannot measure is reported
@@ -203,7 +216,7 @@ src/secondbrain/
   ingest/                                               URL parsing, YouTube, articles, Whisper, chunking, pipeline
   llm/                                                  provider interface, Anthropic + Ollama, validated calls
   schemas.py  prompts.py  analyze.py                    LLM output schemas, prompt text, analysis
-  search.py  links.py                                   search, related items, graph data
+  search.py  links.py                                   dense/BM25/hybrid search, related items, graph data
   profile.py  recommend.py  library.py                  skills and goals, recommendations, delete
   evalset.py  evaluation.py                             label templates, metrics, report
   ui.py  cli.py                                         UI helpers, command line

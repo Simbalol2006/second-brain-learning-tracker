@@ -328,3 +328,16 @@ def test_delete_command(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "Video dQw" not in runner.invoke(cli.app, ["list"]).output
     assert "(derived" not in runner.invoke(cli.app, ["profile", "show"]).output  # its skills are gone too
     assert "No item with id 1" in runner.invoke(cli.app, ["delete", "1", "--yes"]).output
+
+
+def test_search_mode_option(monkeypatch: pytest.MonkeyPatch) -> None:
+    ingest_two(monkeypatch)
+    keyword = runner.invoke(cli.app, ["search", "sourdough", "--mode", "bm25", "--limit", "1"])
+    assert keyword.exit_code == 0, keyword.output
+    assert "1. [BM25 " in keyword.output and "Video aaa (item 2)" in keyword.output
+    dense = runner.invoke(cli.app, ["search", "sourdough", "--mode", "dense", "--limit", "1"])
+    assert "1. [similarity " in dense.output
+    hybrid = runner.invoke(cli.app, ["search", "sourdough", "--limit", "1"])  # default from settings
+    assert "1. [RRF " in hybrid.output and "(dense #1, BM25 #1)" in hybrid.output
+    bad = runner.invoke(cli.app, ["search", "sourdough", "--mode", "fuzzy"])
+    assert bad.exit_code == 1 and "Unknown search mode 'fuzzy'" in bad.output

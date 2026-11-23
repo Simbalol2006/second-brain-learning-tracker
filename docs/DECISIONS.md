@@ -387,3 +387,43 @@ Format: **What / Why / Alternatives / Trade-off.**
 - **Why:** a wrong or failed save could not be removed, which also made it awkward to keep the eval library clean.
 - **Alternatives:** a hidden/archived flag.
 - **Trade-off:** deletion is permanent; unused tag names stay in the `topics` table.
+
+---
+
+## Phase 7 — Hybrid search (BM25 + dense, fused with RRF)
+
+### D61. Keyword search uses SQLite FTS5 with BM25
+- **What:** a migration adds `chunks_fts`, an FTS5 index over `chunks.text`, and `search.bm25_items()` ranks chunks by FTS5's built-in `bm25()`, keeping the best chunk per item (as dense search already did).
+- **Why:** dense embeddings match meaning but can miss exact terms: names, acronyms, error codes, library names ("tsvector", "okapi"). BM25 is strong exactly there. FTS5 ships with SQLite, so this adds no dependency, no server and no second store to keep in step with the database.
+- **Alternatives:** `rank_bm25` in Python (the whole corpus in memory, rebuilt on every start); a search server such as Elasticsearch or Tantivy (far too heavy for a single-user laptop app).
+- **Trade-off:** FTS5's BM25 parameters are fixed (k1 = 1.2, b = 0.75); per-column weights are the only tuning it offers.
+
+### D62. The index is an external-content table kept in step by triggers
+- **What:** `chunks_fts` stores only the index (`content='chunks'`) and reads text from `chunks`. Triggers on insert, update and delete keep it current; the migration runs FTS5's `rebuild` so a database from Phases 1–6 is indexed on upgrade without re-ingesting.
+- **Why:** no text is stored twice, and no code path (re-chunking, deleting an item, cascaded deletes) can forget to update the index, because the database does it. Tests run FTS5's `integrity-check` after each kind of change.
+- **Alternatives:** a contentful FTS table filled from Python in `items.replace_chunks()`.
+- **Trade-off:** writing to `chunks` directly in SQL also writes the index; that is the point, but it makes the triggers part of the schema to remember.
+
+### D63. Words keep their combining marks
+- **What:** the tokenizer is `porter unicode61 categories 'L* N* M* Co'`, and the query side splits words by the same character classes (`search._words`).
+- **Why:** FTS5's default and Python's `\w` both treat combining marks as separators, which cuts Telugu or Hindi words into single consonants ("తెలుగు" becomes త, ల, గ), so a one-letter query matched unrelated text. Found by a test while building this phase; the same class of bug as the Unicode word-boundary fix in the bilingual IR project.
+- **Alternatives:** the default tokenizer (fine for English only).
+- **Trade-off:** the Porter stemmer still only stems English; other scripts are matched as whole words.
+
+### D64. User text never reaches FTS5 as query syntax
+- **What:** `fts_query()` lower-cases the query, splits it into words, quotes each word and joins them with OR.
+- **Why:** FTS5 has its own query language: a raw query containing `-`, `"`, `*`, `:`, `AND` or `NEAR(` either fails with a syntax error or means something the user did not type. OR (rather than FTS5's default AND) lets an item that matches only some words still be found; BM25 already ranks items matching more and rarer words higher.
+- **Alternatives:** pass the query through and catch errors; AND semantics.
+- **Trade-off:** no phrase or prefix search for power users.
+
+### D65. Rankings are merged with reciprocal rank fusion, k = 60
+- **What:** hybrid mode takes the top `SEARCH_DEPTH` items (default 50) from dense and from BM25 and scores each item `Σ 1 / (RRF_K + rank)` over the lists it appears in. The passage shown is the one from the list that ranked the item higher. Each hit records its dense and BM25 rank.
+- **Why:** cosine similarity and BM25 scores live on different scales, and BM25's scale changes with the query and the corpus, so a weighted sum of raw scores needs a normalisation that is itself a tuning problem. RRF uses only ranks and has one constant; k = 60 is the value from the original paper (Cormack, Clarke and Büttcher, SIGIR 2009) and is the common default.
+- **Alternatives:** weighted sum of min-max-normalised scores; a cross-encoder reranker (better, but a second model to run on a CPU).
+- **Trade-off:** RRF ignores how far ahead a top result is. k and depth are defaults, **not tuned on this project's data**.
+
+### D66. Hybrid is the default; the eval compares all three modes
+- **What:** `SEARCH_MODE` (dense / bm25 / hybrid) defaults to hybrid; `sb search --mode` and a selector on the Search page override it. The retrieval evaluation reports the configured mode in the headline and adds a table with recall@5 and MRR for all three modes on the same queries, plus each query's first-relevant rank per mode.
+- **Why:** hybrid is the usual safe choice, but this project only states measured numbers, so the evaluation has to show whether it actually helps on this library. Running all three on the same labels makes that a direct comparison.
+- **Alternatives:** keep dense as the default until measured.
+- **Trade-off:** with about 25 queries, small differences between modes are noise; the report says so. If hybrid does not beat dense on your labels, set `SEARCH_MODE=dense`.

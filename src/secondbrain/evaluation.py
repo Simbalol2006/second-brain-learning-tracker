@@ -151,38 +151,68 @@ def _resolve(conn: sqlite3.Connection, urls: list[object], path: Path) -> list[i
 
 
 def eval_retrieval(
-    conn: sqlite3.Connection, get_embedder: Callable[[], Embedder], path: Path, repeats: int
+    conn: sqlite3.Connection,
+    get_embedder: Callable[[], Embedder],
+    path: Path,
+    repeats: int,
+    settings: Settings | None = None,
 ) -> Section:
+    """Score the configured search mode, and compare all three modes on the same labels.
+
+    The headline numbers are for SEARCH_MODE. The comparison table runs dense, bm25 and hybrid
+    over the same queries so the effect of adding BM25 can be read off directly.
+    """
     section = Section("Retrieval")
     entries = [q for q in _load_yaml(path).get("queries") or [] if q.get("query") and q.get("relevant")]
     if not entries:
         raise NotRun(f"`{path}` has no queries with relevant items yet.")
-    rows, recalls, rranks, timings = [], [], [], []
+    configured = settings.search_mode if settings else "hybrid"
+    options = {"rrf_k": settings.rrf_k, "depth": settings.search_depth} if settings else {}
     embedder = get_embedder()  # loaded only once there is something to measure
-    search.search(conn, embedder, "warm up", limit=5)  # first call pays one-time costs
+    search.search(conn, embedder, "warm up", limit=5, mode=configured, **options)  # one-time costs
+
+    per_mode: dict[str, tuple[list[float], list[float]]] = {m: ([], []) for m in search.SEARCH_MODES}
+    rows, timings = [], []
     for entry in entries:
         relevant = set(_resolve(conn, list(entry["relevant"]), path))
-        ranked = [hit.item_id for hit in search.search(conn, embedder, entry["query"], limit=RANK_CUTOFF)]
+        firsts: dict[str, str] = {}
+        for mode in search.SEARCH_MODES:
+            ranked = [
+                hit.item_id
+                for hit in search.search(conn, embedder, entry["query"], limit=RANK_CUTOFF, mode=mode, **options)
+            ]
+            recall, rrank = recall_at_k(ranked, relevant, 5), reciprocal_rank(ranked, relevant)
+            per_mode[mode][0].append(recall)
+            per_mode[mode][1].append(rrank)
+            firsts[mode] = f"{round(1 / rrank)}" if rrank else f"not in top {RANK_CUTOFF}"
         for _ in range(repeats):
             start = time.perf_counter()
-            search.search(conn, embedder, entry["query"], limit=5)
+            search.search(conn, embedder, entry["query"], limit=5, mode=configured, **options)
             timings.append((time.perf_counter() - start) * 1000)
-        recall, rrank = recall_at_k(ranked, relevant, 5), reciprocal_rank(ranked, relevant)
-        recalls.append(recall)
-        rranks.append(rrank)
-        first = f"{round(1 / rrank)}" if rrank else f"not in top {RANK_CUTOFF}"
-        rows.append(f"| {_cell(entry['query'])} | {len(relevant)} | {recall:.2f} | {first} |")
+        recall = per_mode[configured][0][-1]
+        rows.append(
+            f"| {_cell(entry['query'])} | {len(relevant)} | {recall:.2f} | {firsts[configured]} | "
+            f"{firsts['dense']} | {firsts['bm25']} | {firsts['hybrid']} |"
+        )
 
+    recalls, rranks = per_mode[configured]
     p50, p95 = np.percentile(timings, 50), np.percentile(timings, 95)
     section.headline = {
-        "Retrieval recall@5": f"{np.mean(recalls):.3f} (mean over {len(entries)} queries)",
-        "Retrieval MRR": f"{np.mean(rranks):.3f} (mean over {len(entries)} queries)",
+        "Retrieval recall@5": f"{np.mean(recalls):.3f} (mean over {len(entries)} queries, {configured})",
+        "Retrieval MRR": f"{np.mean(rranks):.3f} (mean over {len(entries)} queries, {configured})",
         "Search latency p50 / p95": f"{p50:.1f} ms / {p95:.1f} ms ({len(timings)} timed searches)",
     }
     missed = sum(1 for r in rranks if r == 0)
+    comparison = [
+        f"| {mode}{' (configured)' if mode == configured else ''} | {np.mean(r):.3f} | {np.mean(m):.3f} | "
+        f"{sum(1 for x in m if x == 0)} |"
+        for mode, (r, m) in per_mode.items()
+    ]
     section.body = "\n".join(
         [
             f"- Queries: **{len(entries)}**",
+            f"- Search mode: **{configured}**"
+            + (f" (RRF k {settings.rrf_k}, depth {settings.search_depth})" if settings and configured == "hybrid" else ""),
             f"- recall@5 (mean): **{np.mean(recalls):.3f}**",
             f"- MRR (first relevant result within top {RANK_CUTOFF}; mean): **{np.mean(rranks):.3f}**",
             f"- Queries with no relevant item in the top {RANK_CUTOFF}: **{missed}**",
@@ -191,8 +221,20 @@ def eval_retrieval(
             "",
             "recall@5 = relevant items found in the top 5 ÷ all relevant items for that query.",
             "",
-            "| Query | Relevant items | recall@5 | Rank of first relevant |",
+            "### Search modes compared on the same queries",
+            "",
+            "| Mode | recall@5 | MRR | Queries with no relevant item in the top "
+            f"{RANK_CUTOFF} |",
             "|---|---|---|---|",
+            *comparison,
+            "",
+            f"With {len(entries)} queries, one query moves recall@5 by up to {1 / len(entries):.3f}: "
+            "read small differences between modes as noise.",
+            "",
+            "### Per query",
+            "",
+            "| Query | Relevant items | recall@5 | Rank of first relevant | dense | bm25 | hybrid |",
+            "|---|---|---|---|---|---|---|",
             *rows,
         ]
     )
@@ -524,7 +566,7 @@ def run(
         raise NotRun("Skipped on request (--skip-summaries).")
 
     jobs: list[tuple[str, Callable[[], Section]]] = [
-        ("Retrieval", lambda: eval_retrieval(conn, get_embedder, eval_dir / evalset.RETRIEVAL_FILE, repeats)),
+        ("Retrieval", lambda: eval_retrieval(conn, get_embedder, eval_dir / evalset.RETRIEVAL_FILE, repeats, settings)),
         ("Linking", lambda: eval_links(conn, settings, eval_dir / evalset.LINKS_FILE)),
         ("Summary faithfulness", skipped if skip_summaries else lambda: eval_summaries(conn, settings, get_judge, eval_dir, rejudge)),
         ("Ingest speed", lambda: eval_speed(conn)),
@@ -559,6 +601,7 @@ def environment(conn: sqlite3.Connection, settings: Settings, judge_model: str) 
         f"{count('SELECT count(*) FROM analyses')} analyzed, {count('SELECT count(*) FROM chunks')} chunks",
         "Embedding model": f"{meta.get('embedding_model', settings.embedding_model)} (dim {meta.get('embedding_dim', '?')})",
         "Chunking": f"{settings.chunk_words} words, {settings.chunk_overlap_words} overlap",
+        "Search": f"{settings.search_mode} (RRF k {settings.rrf_k}, depth {settings.search_depth})",
         "Links": f"text weight {settings.link_embed_weight}, threshold {settings.link_threshold}",
         "App LLM": f"{settings.llm_provider} / {settings.llm_model_name}, prompt {prompts.PROMPT_VERSION}, "
         f"input budget {settings.llm_max_input_tokens} tokens",

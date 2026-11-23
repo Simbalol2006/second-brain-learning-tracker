@@ -221,10 +221,19 @@ def page_search(conn: sqlite3.Connection, settings: Settings) -> None:
     with st.form("search_form"):
         query = st.text_input("What are you looking for?", key="search_query")
         limit = st.slider("Results", 1, 20, 5, key="search_limit")
+        modes = list(search.SEARCH_MODES)
+        mode = st.radio(
+            "Mode", modes, index=modes.index(settings.search_mode), horizontal=True, key="search_mode",
+            help="dense: by meaning · bm25: by keywords · hybrid: both, merged by rank (RRF)",
+        )
         submitted = st.form_submit_button("Search", type="primary")
     if submitted:
         try:
-            st.session_state["search_hits"] = search.search(conn, get_embedder(), query, limit=limit)
+            st.session_state["search_hits"] = search.search(
+                conn, get_embedder(), query, limit=limit, mode=mode,
+                rrf_k=settings.rrf_k, depth=settings.search_depth,
+            )
+            st.session_state["search_hits_mode"] = mode
         except SecondBrainError as exc:
             st.session_state["search_hits"] = []
             st.error(str(exc))
@@ -236,7 +245,8 @@ def page_search(conn: sqlite3.Connection, settings: Settings) -> None:
         st.info("No results.")
     for rank, hit in enumerate(hits, start=1):
         left, right = st.columns([5, 1])
-        left.markdown(f"**{rank}. [{hit.title}]({hit.link})** · similarity {hit.score:.2f}")
+        shown_mode = st.session_state.get("search_hits_mode", settings.search_mode)
+        left.markdown(f"**{rank}. [{hit.title}]({hit.link})** · {search.describe(hit, shown_mode)}")
         left.caption(hit.passage[:400] + ("..." if len(hit.passage) > 400 else ""))
         right.button("Open", key=f"hit_{hit.item_id}", on_click=go_to, args=("Item", hit.item_id))
 

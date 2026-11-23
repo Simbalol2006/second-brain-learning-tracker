@@ -124,6 +124,29 @@ MIGRATIONS: list[str] = [
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     """,
+    # 5 (Phase 7): BM25 keyword index over chunk text, for hybrid search.
+    # External-content FTS5 table: it stores only the index and reads text from `chunks`.
+    # Triggers keep it in step with every insert, update and delete on `chunks` (including
+    # deletes cascaded from `items`); 'rebuild' indexes the chunks that already exist.
+    # categories 'L* N* M* Co': combining marks (M*) count as part of a word. The default
+    # leaves them out and splits words in Indic scripts (Telugu, Hindi) into single letters.
+    """
+    CREATE VIRTUAL TABLE chunks_fts USING fts5(
+        text, content='chunks', content_rowid='id',
+        tokenize="porter unicode61 categories 'L* N* M* Co'"
+    );
+    CREATE TRIGGER chunks_fts_ai AFTER INSERT ON chunks BEGIN
+        INSERT INTO chunks_fts (rowid, text) VALUES (new.id, new.text);
+    END;
+    CREATE TRIGGER chunks_fts_ad AFTER DELETE ON chunks BEGIN
+        INSERT INTO chunks_fts (chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+    END;
+    CREATE TRIGGER chunks_fts_au AFTER UPDATE ON chunks BEGIN
+        INSERT INTO chunks_fts (chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+        INSERT INTO chunks_fts (rowid, text) VALUES (new.id, new.text);
+    END;
+    INSERT INTO chunks_fts (chunks_fts) VALUES ('rebuild');
+    """,
 ]
 
 

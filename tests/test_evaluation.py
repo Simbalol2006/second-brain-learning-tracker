@@ -101,8 +101,8 @@ def test_retrieval_section(conn: sqlite3.Connection, embedder: FakeEmbedder, lib
         {"query": "", "relevant": []},  # unfinished entries are ignored
     ]
     section = evaluation.eval_retrieval(conn, lambda: embedder, write(eval_dir / "retrieval.yaml", {"queries": queries}), repeats=3)
-    assert section.headline["Retrieval recall@5"] == "1.000 (mean over 2 queries)"  # only 3 items exist
-    assert section.headline["Retrieval MRR"] == "1.000 (mean over 2 queries)"
+    assert section.headline["Retrieval recall@5"] == "1.000 (mean over 2 queries, hybrid)"  # only 3 items exist
+    assert section.headline["Retrieval MRR"] == "1.000 (mean over 2 queries, hybrid)"
     assert "(6 timed searches)" in section.headline["Search latency p50 / p95"]
     assert "| sourdough bread fermentation | 1 | 1.00 | 1 |" in section.body
     assert "| sql joins on database tables | 2 | 1.00 | 1 |" in section.body
@@ -113,6 +113,17 @@ def test_retrieval_counts_misses(conn: sqlite3.Connection, embedder: FakeEmbedde
     section = evaluation.eval_retrieval(conn, lambda: embedder, write(eval_dir / "retrieval.yaml", {"queries": queries}), repeats=1)
     assert "1.000" not in section.headline["Retrieval MRR"]  # the relevant item is not ranked first
     assert section.headline["Retrieval MRR"].startswith(("0.500", "0.333"))
+
+
+def test_retrieval_compares_all_three_modes(conn: sqlite3.Connection, settings: Settings, embedder: FakeEmbedder, library: dict[str, int], eval_dir: Path) -> None:
+    queries = [{"query": "sourdough bread fermentation", "relevant": [URL.format("b" * 11)]}]
+    configured = settings.model_copy(update={"search_mode": "bm25"})
+    section = evaluation.eval_retrieval(conn, lambda: embedder, write(eval_dir / "retrieval.yaml", {"queries": queries}), repeats=1, settings=configured)
+    assert section.headline["Retrieval recall@5"] == "1.000 (mean over 1 queries, bm25)"
+    assert "- Search mode: **bm25**" in section.body
+    for row in ("| dense | 1.000 | 1.000 | 0 |", "| bm25 (configured) | 1.000 | 1.000 | 0 |", "| hybrid | 1.000 | 1.000 | 0 |"):
+        assert row in section.body
+    assert "| sourdough bread fermentation | 1 | 1.00 | 1 | 1 | 1 | 1 |" in section.body
 
 
 @pytest.mark.parametrize(
@@ -318,6 +329,7 @@ def test_full_run_and_report(conn: sqlite3.Connection, settings: Settings, embed
     env = evaluation.environment(conn, settings, "fake / fake-model")
     assert env["Items"] == "3 saved, 3 embedded, 3 analyzed, " + env["Items"].split(", ")[-1]
     assert env["Embedding model"] == "fake-embedder (dim 64)" and env["Links"] == "text weight 0.7, threshold 0.5"
+    assert env["Search"] == "hybrid (RRF k 60, depth 50)"
     report = evaluation.render(sections, env)
     for expected in ("| Retrieval recall@5 | 1.000", "| Linking precision | n/a (0/0)", "| Summary faithfulness (LLM judge) | 1.000 (8/8)",
                      "| Ingest time per item", "| JSON valid on first try (app calls) | 1.000 (3/3) |", "| Judge LLM | fake / fake-model |", "## Linking"):

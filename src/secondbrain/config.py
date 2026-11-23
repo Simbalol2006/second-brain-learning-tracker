@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     link_embed_weight: float = Field(default=0.7, ge=0.0, le=1.0)
     link_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
 
+    search_mode: Literal["dense", "bm25", "hybrid"] = "hybrid"
+    rrf_k: int = Field(default=60, ge=1)
+    search_depth: int = Field(default=50, ge=1)
+
     llm_provider: Literal["anthropic", "ollama"] = "anthropic"
     llm_model: str = ""
     llm_max_input_tokens: int = Field(default=12000, ge=1000)

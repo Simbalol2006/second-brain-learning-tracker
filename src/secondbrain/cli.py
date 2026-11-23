@@ -201,18 +201,26 @@ def list_items(
 def search(
     query: Annotated[str, typer.Argument(help="What you are looking for, in your own words.")],
     limit: Annotated[int, typer.Option(help="How many items to show.")] = 5,
+    mode: Annotated[
+        str | None,
+        typer.Option(help="dense, bm25 or hybrid. Default: SEARCH_MODE from .env (hybrid)."),
+    ] = None,
 ) -> None:
-    """Semantic search over everything saved."""
+    """Search everything saved: by meaning (dense), by keywords (bm25), or both (hybrid)."""
     settings, conn = _open()
+    mode = mode or settings.search_mode
     try:
-        hits = searching.search(conn, _embedder_factory(settings)(), query, limit=limit)
+        hits = searching.search(
+            conn, _embedder_factory(settings)(), query, limit=limit, mode=mode,  # type: ignore[arg-type]
+            rrf_k=settings.rrf_k, depth=settings.search_depth,
+        )
     except SecondBrainError as exc:
         _fail(str(exc))
     if not hits:
         typer.echo("No results. Save something first with: sb ingest <url>")
         return
     for rank, hit in enumerate(hits, start=1):
-        typer.echo(f"{rank}. [{hit.score:.2f}] {hit.title} (item {hit.item_id})")
+        typer.echo(f"{rank}. [{searching.describe(hit, mode)}] {hit.title} (item {hit.item_id})")
         typer.echo(f"   {hit.link}")
         typer.echo(f"   {hit.passage[:240]}{'...' if len(hit.passage) > 240 else ''}")
 
